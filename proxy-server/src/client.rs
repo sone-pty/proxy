@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use protocol::{PacketHbAgent, PacketHbClient, ReqClientLogin};
+use protocol::{PacketHbAgent, PacketHbClient, ReqAgentBuild, ReqClientLogin};
 use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::{
     tokio_ext::{
@@ -10,6 +10,8 @@ use vnpkt::{
     util::async_action::AsyncAction,
 };
 use vnsvrbase::tokio_ext::tcp_link::{send_pkt, TcpLink};
+
+use crate::{conn::ConnInfo, ROUTES};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -24,16 +26,16 @@ impl Client {
         };
         let register = &*super::REGISTRY;
 
-        let pid = link.read.read_compressed_u64().await?;
-        if pid <= u32::MAX as _ {
-            if let Some(item) = register.query(pid as u32) {
-                let r = item.recv(&mut link.read).await?;
-                r.proc(&mut client).await?;
-                link.next_state = client.next_state.take();
-                return Ok(());
+        loop {
+            let pid = link.read.read_compressed_u64().await?;
+            if pid <= u32::MAX as _ {
+                if let Some(item) = register.query(pid as u32) {
+                    let r = item.recv(&mut link.read).await?;
+                    r.proc(&mut client).await?;
+                }
             }
+            break Err(std::io::ErrorKind::InvalidData.into());
         }
-        Err(std::io::ErrorKind::InvalidData.into())
     }
 }
 
@@ -60,7 +62,11 @@ impl PacketProc<ReqClientLogin> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<ReqClientLogin>) -> Self::Output<'_> {
-        async move { Ok(()) }
+        async move {
+            let id = ROUTES.insert(ConnInfo::new(0, pkt.port, self.handle.clone()));
+            let _ = send_pkt!(self.handle, ReqAgentBuild { port: pkt.port, id });
+            Ok(())
+        }
     }
 }
 

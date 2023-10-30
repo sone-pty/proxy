@@ -5,9 +5,9 @@
 use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 
 use clap::Parser;
-use protocol::{PacketHbClient, ReqClientLogin, RspClientLoginOk};
+use protocol::{PacketHbClient, ReqClientLogin, RspClientLoginFailed, RspClientLoginOk};
 use tokio::{
-    io::BufReader,
+    io::{AsyncWriteExt, BufReader},
     net::{tcp::OwnedReadHalf, TcpStream},
     sync::watch::{channel, Sender},
 };
@@ -106,6 +106,8 @@ impl RegistryInit for Client {
 
     fn init(register: &mut Registry<Self>) {
         register.insert::<PacketHbClient>();
+        register.insert::<RspClientLoginOk>();
+        register.insert::<RspClientLoginFailed>();
     }
 }
 
@@ -113,12 +115,28 @@ impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
-        async move { Ok(()) }
+        async { Ok(()) }
     }
 }
 
 impl PacketProc<RspClientLoginOk> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, pkt: Box<RspClientLoginOk>) -> Self::Output<'_> {}
+    fn proc(&mut self, _: Box<RspClientLoginOk>) -> Self::Output<'_> {
+        async {
+            println!("Client Login Finished, Proxy Server is listening.");
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<RspClientLoginFailed> for Client {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
+        async {
+            println!("Client Login Failed, No Active Proxy Server.");
+            Ok(())
+        }
+    }
 }

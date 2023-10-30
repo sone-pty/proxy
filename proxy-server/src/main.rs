@@ -4,6 +4,7 @@
 use std::sync::LazyLock;
 
 use client::Client;
+use conn::Conns;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::mpsc,
@@ -12,8 +13,10 @@ use vnpkt::tokio_ext::registry::Registry;
 use vnsvrbase::{process::hook_terminate_signal, tokio_ext::tcp_link::TcpLink};
 
 mod client;
+mod conn;
 
 static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
+static ROUTES: LazyLock<Conns> = LazyLock::new(|| Conns::new());
 
 fn main() {
     let (quit_tx, mut quit_rx) = tokio::sync::watch::channel(false);

@@ -9,6 +9,7 @@ edition = "2021"
 vnsvrbase = { path = "../../vnsvrbase" }
 vnpkt = { path = "../../vnpkt" }
 protocol = { path = "../protocol" }
+dashmap = "4.0.2"
 
 [dependencies.tokio]
 version = "1.25"

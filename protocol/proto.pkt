@@ -6,3 +6,9 @@ request<3> ReqClientLogin {
 }
 
 response<4> RspClientLoginOk {}
+response<5> RspClientLoginFailed {}
+
+request<6> ReqAgentBuild {
+    u16 port;
+    u32 id;
+}
