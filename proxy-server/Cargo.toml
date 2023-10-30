@@ -7,3 +7,9 @@ edition = "2021"
 
 [dependencies]
 vnsvrbase = { path = "../../vnsvrbase" }
+vnpkt = { path = "../../vnpkt" }
+protocol = { path = "../protocol" }
+
+[dependencies.tokio]
+version = "1.25"
+features = ["net", "macros", "sync", "io-util", "rt-multi-thread", "time"]

@@ -1,0 +1,8 @@
+packet<1> PacketHbClient;
+packet<2> PacketHbAgent;
+
+request<3> ReqClientLogin {
+    u16 port;
+}
+
+response<4> RspClientLoginOk {}
