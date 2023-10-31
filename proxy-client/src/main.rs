@@ -24,7 +24,7 @@ static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 
 #[derive(Parser)]
 pub struct Args {
-    target: String,
+    local: String,
     port: u16,
     server: String,
 }
@@ -138,7 +138,7 @@ impl PacketProc<RspNewConnectionClient> for Client {
 
     fn proc(&mut self, pkt: Box<RspNewConnectionClient>) -> Self::Output<'_> {
         async move {
-            if let Ok(mut local) = TcpStream::connect(self.args.target.as_str()).await {
+            if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
                 {
                     if remote

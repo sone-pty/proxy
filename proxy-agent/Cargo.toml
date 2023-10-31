@@ -6,3 +6,10 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+vnsvrbase = { path = "../../vnsvrbase" }
+vnpkt = { path = "../../vnpkt" }
+protocol = { path = "../protocol" }
+
+[dependencies.tokio]
+version = "1.25"
+features = ["net", "macros", "sync", "io-util", "rt-multi-thread", "time"]
