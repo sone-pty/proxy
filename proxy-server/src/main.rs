@@ -1,6 +1,7 @@
 #![feature(lazy_cell)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(async_closure)]
+#![feature(sync_unsafe_cell)]
 
 use std::{sync::LazyLock, time::Duration};
 
@@ -94,13 +95,14 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
 
                                     if is_client(&data) {
                                         routes.get_rx(id).map(async move |rx| {
-                                            let mut guard = rx.lock().unwrap();
-                                            match guard.recv().await {
-                                                Some(mut peer) => {
-                                                    drop(guard);
-                                                    let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
-                                                },
-                                                _ => {}
+                                            unsafe {
+                                                let guard = &mut *rx.get();
+                                                match guard.recv().await {
+                                                    Some(mut peer) => {
+                                                        let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
+                                                    },
+                                                    _ => {}
+                                                }
                                             }
                                         });
                                     } else {

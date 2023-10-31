@@ -6,13 +6,12 @@ use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 
 use clap::Parser;
 use protocol::{
-    compose, PacketHbClient, ReqClientLogin, RspClientLoginFailed, RspNewConnFailedClient,
-    RspNewConnectionClient,
+    compose, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
+    RspNewConnFailedClient,
 };
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpStream},
-    sync::watch::{channel, Sender},
 };
 use vnpkt::tokio_ext::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -82,25 +81,11 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
 struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
     args: Args,
-    sx: Sender<bool>,
 }
 
 impl Client {
     pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle, args: Args) -> Self {
-        let (sx, mut rx) = channel(false);
-        let handle_clone = handle.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = rx.changed() => { break; }
-                    _ = async {
-                        tokio::time::sleep(Duration::from_secs(10)).await;
-                        let _ = send_pkt!(handle_clone, PacketHbClient {});
-                    } => {}
-                }
-            }
-        });
-        Self { handle, args, sx }
+        Self { handle, args }
     }
 }
 
@@ -116,8 +101,11 @@ impl RegistryInit for Client {
 impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
-        async { Ok(()) }
+    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
+        async {
+            let _ = send_pkt!(self.handle, pkt);
+            Ok(())
+        }
     }
 }
 
@@ -127,16 +115,16 @@ impl PacketProc<RspClientLoginFailed> for Client {
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
             println!("Client Login Failed, No Active Proxy Server.");
-            let _ = self.sx.send(true);
+            // TODO: Retry
             Ok(())
         }
     }
 }
 
-impl PacketProc<RspNewConnectionClient> for Client {
+impl PacketProc<ReqNewConnectionClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, pkt: Box<RspNewConnectionClient>) -> Self::Output<'_> {
+    fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         async move {
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await

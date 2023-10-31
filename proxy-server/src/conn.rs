@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicU32, Arc, Mutex};
+use std::{
+    cell::SyncUnsafeCell,
+    sync::{atomic::AtomicU32, Arc},
+};
 
 use dashmap::DashMap;
 use tokio::{
@@ -14,13 +17,19 @@ pub struct Conns {
 impl Conns {
     pub fn new() -> Self {
         Self {
-            next: AtomicU32::new(0),
+            // 0 is flag
+            next: AtomicU32::new(1),
             conns: DashMap::new(),
         }
     }
 
+    #[inline]
+    pub fn next(&self) -> u32 {
+        self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
     pub fn insert(&self, info: ConnInfo) -> u32 {
-        let id = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let id = info.id;
         match self.conns.entry(id) {
             dashmap::mapref::entry::Entry::Vacant(e) => {
                 e.insert(info);
@@ -37,7 +46,7 @@ impl Conns {
         v.map_or(None, |v| Some(v.client.clone()))
     }
 
-    pub fn get_rx(&self, id: u32) -> Option<Arc<Mutex<Receiver<TcpStream>>>> {
+    pub fn get_rx(&self, id: u32) -> Option<Arc<SyncUnsafeCell<Receiver<TcpStream>>>> {
         let v = self.conns.get(&id).take();
         v.map_or(None, |v| Some(v.rx.clone()))
     }
@@ -58,7 +67,7 @@ pub struct ConnInfo {
     port: u16,
     client: vnsvrbase::tokio_ext::tcp_link::Handle,
     sx: Arc<Sender<TcpStream>>,
-    rx: Arc<Mutex<Receiver<TcpStream>>>,
+    rx: Arc<SyncUnsafeCell<Receiver<TcpStream>>>,
 }
 
 impl ConnInfo {
@@ -69,7 +78,7 @@ impl ConnInfo {
             port,
             client,
             sx: Arc::new(sx),
-            rx: Arc::new(Mutex::new(rx)),
+            rx: Arc::new(SyncUnsafeCell::new(rx)),
         }
     }
 }
