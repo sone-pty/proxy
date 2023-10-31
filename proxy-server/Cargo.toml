@@ -10,6 +10,7 @@ vnsvrbase = { path = "../../vnsvrbase" }
 vnpkt = { path = "../../vnpkt" }
 protocol = { path = "../protocol" }
 dashmap = "4.0.2"
+clap = { version = "4.1.8", features = ["derive"] }
 
 [dependencies.tokio]
 version = "1.25"

@@ -5,10 +5,29 @@ request<3> ReqClientLogin {
     u16 port;
 }
 
-response<4> RspClientLoginOk {}
 response<5> RspClientLoginFailed {}
 
 request<6> ReqAgentBuild {
     u16 port;
+    u32 id;
+}
+
+// agent->server
+response<7> RspAgentBuild {
+    u32 id;
+    bool ok;
+}
+
+// server->agent
+response<8> RspClientNotFound {}
+
+response<9> RspNewConnectionAgent {
+    u32 id;
+}
+response<10> RspNewConnectionClient {
+    u32 id;
+}
+
+response<11> RspNewConnFailedClient {
     u32 id;
 }

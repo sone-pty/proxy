@@ -271,6 +271,7 @@ dependencies = [
 name = "proxy-server"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "dashmap",
  "protocol",
  "tokio",

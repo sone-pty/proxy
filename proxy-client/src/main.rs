@@ -5,14 +5,17 @@
 use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 
 use clap::Parser;
-use protocol::{PacketHbClient, ReqClientLogin, RspClientLoginFailed, RspClientLoginOk};
+use protocol::{
+    compose, PacketHbClient, ReqClientLogin, RspClientLoginFailed, RspNewConnFailedClient,
+    RspNewConnectionClient,
+};
 use tokio::{
-    io::{AsyncWriteExt, BufReader},
+    io::BufReader,
     net::{tcp::OwnedReadHalf, TcpStream},
     sync::watch::{channel, Sender},
 };
 use vnpkt::tokio_ext::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     registry::{PacketProc, Registry, RegistryInit},
 };
 use vnsvrbase::tokio_ext::tcp_link::{send_pkt, TcpLink};
@@ -40,13 +43,13 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqClientLogin { port: args.port });
-        receiving(link).await
+        receiving(link, args).await
     });
     Ok(())
 }
 
-async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
-    let mut client = Client::new(link.handle().clone());
+async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
+    let mut client = Client::new(link.handle().clone(), args);
     loop {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
@@ -78,15 +81,15 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
 
 struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    hb: tokio::task::JoinHandle<()>,
+    args: Args,
     sx: Sender<bool>,
 }
 
 impl Client {
-    pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
+    pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle, args: Args) -> Self {
         let (sx, mut rx) = channel(false);
         let handle_clone = handle.clone();
-        let hb = tokio::spawn(async move {
+        tokio::spawn(async move {
             loop {
                 tokio::select! {
                     _ = rx.changed() => { break; }
@@ -97,7 +100,7 @@ impl Client {
                 }
             }
         });
-        Self { handle, hb, sx }
+        Self { handle, args, sx }
     }
 }
 
@@ -106,7 +109,6 @@ impl RegistryInit for Client {
 
     fn init(register: &mut Registry<Self>) {
         register.insert::<PacketHbClient>();
-        register.insert::<RspClientLoginOk>();
         register.insert::<RspClientLoginFailed>();
     }
 }
@@ -119,23 +121,41 @@ impl PacketProc<PacketHbClient> for Client {
     }
 }
 
-impl PacketProc<RspClientLoginOk> for Client {
-    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
-
-    fn proc(&mut self, _: Box<RspClientLoginOk>) -> Self::Output<'_> {
-        async {
-            println!("Client Login Finished, Proxy Server is listening.");
-            Ok(())
-        }
-    }
-}
-
 impl PacketProc<RspClientLoginFailed> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
             println!("Client Login Failed, No Active Proxy Server.");
+            let _ = self.sx.send(true);
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<RspNewConnectionClient> for Client {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, pkt: Box<RspNewConnectionClient>) -> Self::Output<'_> {
+        async move {
+            if let Ok(mut local) = TcpStream::connect(self.args.target.as_str()).await {
+                if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
+                {
+                    if remote
+                        .write_compressed_u64(compose(pkt.id, true))
+                        .await
+                        .is_ok()
+                    {
+                        let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                    } else {
+                        println!("Send Pkt Id to Server Failed.");
+                    }
+                } else {
+                    println!("Connect Remote Server Failed.");
+                }
+            } else {
+                let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
+            }
             Ok(())
         }
     }
