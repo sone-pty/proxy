@@ -5,21 +5,24 @@
 
 use std::{sync::LazyLock, time::Duration};
 
+use agent::Agent;
 use clap::Parser;
 use client::Client;
 use conn::Conns;
-use protocol::{get_id, is_client};
+use protocol::{get_id, is_client, BOUDARY};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::{mpsc, watch::channel},
 };
 use vnpkt::tokio_ext::{io::AsyncReadExt, registry::Registry};
 use vnsvrbase::{process::hook_terminate_signal, tokio_ext::tcp_link::TcpLink};
 
+mod agent;
 mod client;
 mod conn;
 
-static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
+static REGISTRY_CLIENT: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
+static REGISTRY_AGENT: LazyLock<Registry<Agent>> = LazyLock::new(Registry::new);
 static ROUTES: LazyLock<Conns> = LazyLock::new(|| Conns::new());
 
 #[derive(Parser)]
@@ -76,7 +79,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
             while let Some(stream) = recv.recv().await {
                 let _ = stream.set_nodelay(true);
                 let _ = stream.set_linger(None);
-                TcpLink::attach(stream, &wrt, &handle, Client::receiving);
+                TcpLink::attach(stream, &wrt, &handle, receiving);
             }
         } => {}
         _ = async {
@@ -119,4 +122,32 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
         } => {}
     }
     Ok(())
+}
+
+async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
+    let (sx, rx) = channel(None);
+    let mut agent = Agent::new(link.handle().clone(), sx);
+    let register_agent = &*REGISTRY_AGENT;
+
+    loop {
+        let pid = link.read.read_compressed_u64().await?;
+        if pid <= u32::MAX as _ {
+            if (pid as u32) < BOUDARY {
+                let mut client = Client::new(link.handle().clone(), rx.clone());
+                let register = &*REGISTRY_CLIENT;
+                if let Some(item) = register.query(pid as u32) {
+                    let r = item.recv(&mut link.read).await?;
+                    r.proc(&mut client).await?;
+                    continue;
+                }
+            } else {
+                if let Some(item) = register_agent.query(pid as u32) {
+                    let r = item.recv(&mut link.read).await?;
+                    r.proc(&mut agent).await?;
+                    continue;
+                }
+            }
+        }
+        break Err(std::io::ErrorKind::InvalidData.into());
+    }
 }

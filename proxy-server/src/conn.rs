@@ -25,7 +25,11 @@ impl Conns {
 
     #[inline]
     pub fn next(&self) -> u32 {
-        self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        let prev = self.next.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if prev == u32::MAX {
+            self.next.store(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        prev
     }
 
     pub fn insert(&self, info: ConnInfo) -> u32 {

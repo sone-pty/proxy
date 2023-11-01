@@ -2,7 +2,9 @@
 
 mod proto;
 pub use proto::*;
+use vnpkt::prelude::PacketId;
 
+pub const BOUDARY: u32 = <PacketBoudary as PacketId>::PID;
 pub const CLIENT_ID: u32 = 1 << 1;
 pub const AGENT_ID: u32 = 1 << 2;
 

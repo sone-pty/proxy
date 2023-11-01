@@ -1,45 +1,31 @@
 use std::{collections::HashMap, future::Future, time::Duration};
 
-use protocol::{
-    PacketHbAgent, PacketHbClient, ReqClientLogin, ReqNewConnectionAgent, ReqNewConnectionClient,
-    RspAgentBuild, RspClientLoginFailed, RspClientNotFound, RspNewConnFailedClient,
-};
+use protocol::{PacketHbClient, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient};
 use tokio::{
     io::BufReader,
     net::tcp::OwnedReadHalf,
-    sync::watch::{channel, Sender},
+    sync::watch::{channel, Receiver, Sender},
 };
-use vnpkt::tokio_ext::{
-    io::AsyncReadExt,
-    registry::{PacketProc, RegistryInit},
-};
-use vnsvrbase::tokio_ext::tcp_link::{send_pkt, TcpLink};
+use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
+use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
 use crate::{conn::ConnInfo, ROUTES};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx_clients: HashMap<u32, Sender<u32>>,
+    sx_clients: HashMap<u32, Sender<bool>>,
+    rx_agent: Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
 }
 
 impl Client {
-    pub async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
-        let mut client = Client {
-            handle: link.handle().clone(),
+    pub fn new(
+        handle: vnsvrbase::tokio_ext::tcp_link::Handle,
+        rx_agent: Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
+    ) -> Self {
+        Self {
+            handle,
             sx_clients: HashMap::new(),
-        };
-        let register = &*super::REGISTRY;
-
-        loop {
-            let pid = link.read.read_compressed_u64().await?;
-            if pid <= u32::MAX as _ {
-                if let Some(item) = register.query(pid as u32) {
-                    let r = item.recv(&mut link.read).await?;
-                    r.proc(&mut client).await?;
-                    continue;
-                }
-            }
-            break Err(std::io::ErrorKind::InvalidData.into());
+            rx_agent,
         }
     }
 }
@@ -50,15 +36,21 @@ impl RegistryInit for Client {
     fn init(register: &mut vnpkt::tokio_ext::registry::Registry<Self>) {
         register.insert::<PacketHbClient>();
         register.insert::<ReqClientLogin>();
-        register.insert::<RspAgentBuild>();
+        register.insert::<RspNewConnFailedClient>();
     }
 }
 
 impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
-        async move { Ok(()) }
+    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
+        async move {
+            self.sx_clients.get(&pkt.id).map(|sx| {
+                let now = *sx.borrow();
+                let _ = sx.send(!now);
+            });
+            Ok(())
+        }
     }
 }
 
@@ -70,55 +62,41 @@ impl PacketProc<ReqClientLogin> for Client {
             let id = ROUTES.insert(ConnInfo::new(ROUTES.next(), pkt.port, self.handle.clone()));
             let handle = self.handle.clone();
             let routes = &*ROUTES;
-            let (sx, mut rx) = channel(0);
-            self.sx_clients.insert(id, sx);
+            let (tsx, trx) = channel(false);
+            self.sx_clients.insert(id, tsx);
 
             tokio::spawn(async move {
                 loop {
+                    let (sx, mut rx) = channel(0);
                     tokio::select! {
                         _ = rx.changed() => {
-                            routes.remove(*rx.borrow());
+                            let id = *rx.borrow();
+                            routes.remove(id);
                             break;
                         }
                         _ = async {
                             tokio::time::sleep(Duration::from_secs(10)).await;
-                            let _ = send_pkt!(handle, PacketHbClient {});
+                            let _ = send_pkt!(handle, PacketHbClient {id});
+                            // check heartbeat
+                            let mut hbrx = trx.clone();
+                            tokio::spawn(async move {
+                                tokio::select! {
+                                    _ = hbrx.changed() => {}
+                                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
+                                        let _ = sx.send(id);
+                                    }
+                                }
+                            });
                         } => {}
                     }
                 }
             });
-            Ok(())
-        }
-    }
-}
 
-impl PacketProc<PacketHbAgent> for Client {
-    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
-
-    fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
-        async move {
-            let _ = send_pkt!(self.handle, pkt);
-            Ok(())
-        }
-    }
-}
-
-impl PacketProc<RspAgentBuild> for Client {
-    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
-
-    fn proc(&mut self, pkt: Box<RspAgentBuild>) -> Self::Output<'_> {
-        async move {
-            let client = ROUTES.get_client(pkt.id);
-            if pkt.ok && client.is_some() {
-                let _ = send_pkt!(client.unwrap(), ReqNewConnectionClient { id: pkt.id });
-                let _ = send_pkt!(self.handle, ReqNewConnectionAgent { id: pkt.id });
-            } else if !pkt.ok {
-                let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
-                ROUTES.remove(pkt.id);
-            } else {
-                let _ = send_pkt!(self.handle, RspClientNotFound {});
-                ROUTES.remove(pkt.id);
-            }
+            let _ = self.rx_agent.changed().await;
+            let agent_hd = self.rx_agent.borrow_and_update();
+            agent_hd.as_ref().map(|v| {
+                let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+            });
             Ok(())
         }
     }
