@@ -54,16 +54,10 @@ impl PacketProc<ReqAgentLogin> for Agent {
             let sx = self.sx.clone();
             let handle = self.handle.clone();
 
+            // loop for new client conn
             tokio::spawn(async move {
                 loop {
-                    let _ = sx.send_if_modified(|inner| {
-                        if inner.is_none() {
-                            *inner = Some(handle.clone());
-                            true
-                        } else {
-                            false
-                        }
-                    });
+                    let _ = sx.send_replace(Some(handle.clone()));
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
             });
