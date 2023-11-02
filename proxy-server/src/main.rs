@@ -105,22 +105,32 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                     let conns = &*CONNS;
 
                                     if is_client(&data) {
-                                        conns.get_rx(id).map(async move |rx| {
-                                            unsafe {
-                                                let guard = &mut *rx.get();
-                                                match guard.recv().await {
-                                                    Some(mut peer) => {
-                                                        CONNS.remove(id);
-                                                        let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
-                                                    },
-                                                    _ => {}
-                                                }
-                                            }
-                                        });
+                                        match conns.get_rx(id) {
+                                            Some(rx) => {
+                                                /* unsafe {
+                                                    let guard = &mut *rx.get();
+                                                    match guard.recv().await {
+                                                        Some(mut peer) => {
+                                                            CONNS.remove(id);
+                                                            println!("Conn.{} Begin", id);
+                                                            match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                                Ok(_) => println!("Conn.{} Disconnected", id),
+                                                                Err(e) => println!("Conn.{} Error: {}", id, e)
+                                                            }
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                } */
+                                            },
+                                            _ => {}
+                                        }
                                     } else {
-                                        conns.get_sx(id).map(async move |sx| {
-                                            let _ = sx.send(stream).await;
-                                        });
+                                        match conns.get_sx(id) {
+                                            Some(sx) => {
+                                                let _ = sx.send(stream).await;
+                                            },
+                                            _ => {}
+                                        }
                                     }
                                 }
                             } => {}
