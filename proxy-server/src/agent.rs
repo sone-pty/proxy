@@ -40,8 +40,11 @@ impl RegistryInit for Agent {
 impl PacketProc<PacketHbAgent> for Agent {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<PacketHbAgent>) -> Self::Output<'_> {
-        async { Ok(()) }
+    fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
+        async {
+            let _ = send_pkt!(self.handle, pkt);
+            Ok(())
+        }
     }
 }
 
