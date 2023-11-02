@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::future::Future;
 
 use protocol::{
     PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
@@ -12,7 +12,7 @@ use crate::{conn::ConnInfo, CLIENTS, CONNS};
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx: Arc<Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>>,
+    sx: Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
 }
 
 impl Agent {
@@ -20,10 +20,7 @@ impl Agent {
         handle: vnsvrbase::tokio_ext::tcp_link::Handle,
         sx: Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
     ) -> Self {
-        Self {
-            handle,
-            sx: Arc::new(sx),
-        }
+        Self { handle, sx }
     }
 }
 
@@ -54,16 +51,7 @@ impl PacketProc<ReqAgentLogin> for Agent {
     fn proc(&mut self, _: Box<ReqAgentLogin>) -> Self::Output<'_> {
         async {
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
-            let sx = self.sx.clone();
-            let handle = self.handle.clone();
-
-            // loop for new client conn
-            tokio::spawn(async move {
-                loop {
-                    let _ = sx.send_replace(Some(handle.clone()));
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-            });
+            let _ = self.sx.send(Some(self.handle.clone()));
             Ok(())
         }
     }

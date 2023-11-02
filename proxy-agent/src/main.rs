@@ -56,6 +56,7 @@ fn main() {
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), 60010)).await?;
+    println!("Connect Server Success.");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqAgentLogin {});

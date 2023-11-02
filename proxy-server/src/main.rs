@@ -142,12 +142,10 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
                     r.proc(&mut client).await?;
                     continue;
                 }
-            } else {
-                if let Some(item) = register_agent.query(pid as u32) {
-                    let r = item.recv(&mut link.read).await?;
-                    r.proc(&mut agent).await?;
-                    continue;
-                }
+            } else if let Some(item) = register_agent.query(pid as u32) {
+                let r = item.recv(&mut link.read).await?;
+                r.proc(&mut agent).await?;
+                continue;
             }
         }
         break Err(std::io::ErrorKind::InvalidData.into());
