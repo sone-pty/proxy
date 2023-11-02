@@ -210,8 +210,10 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                     match self.conns.remove(&(pkt.id, pkt.sid)) {
                         Some((_, mut local)) => {
                             tokio::spawn(async move {
-                                let _ =
-                                    tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                                match tokio::io::copy_bidirectional(&mut local, &mut remote).await {
+                                    Ok(_) => println!("Local Conn Disconnected"),
+                                    Err(e) => println!("Local Conn Error: {}", e),
+                                }
                             });
                         }
                         _ => {
