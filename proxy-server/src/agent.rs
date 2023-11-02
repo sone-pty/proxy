@@ -74,7 +74,13 @@ impl PacketProc<RspAgentBuild> for Agent {
             let client = ROUTES.get_client(pkt.id);
             if pkt.ok && client.is_some() {
                 let _ = send_pkt!(client.unwrap(), ReqNewConnectionClient { id: pkt.id });
-                let _ = send_pkt!(self.handle, ReqNewConnectionAgent { id: pkt.id });
+                let _ = send_pkt!(
+                    self.handle,
+                    ReqNewConnectionAgent {
+                        id: pkt.id,
+                        sid: pkt.sid
+                    }
+                );
             } else if !pkt.ok && client.is_some() {
                 let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
                 ROUTES.remove(pkt.id);

@@ -41,6 +41,7 @@ request<102> ReqAgentBuild {
 // Agent->server: 监听请求的响应
 response<103> RspAgentBuild {
     u32 id;
+    u32 sid;
     bool ok;
 }
 
@@ -50,6 +51,7 @@ response<104> RspClientNotFound {}
 // server->Agent: 构建数据链路
 request<105> ReqNewConnectionAgent {
     u32 id;
+    u32 sid;
 }
 
 // Agent->server

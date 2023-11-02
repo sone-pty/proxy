@@ -6,13 +6,16 @@ use std::{
     future::Future,
     net::Ipv4Addr,
     process::exit,
-    sync::{Arc, LazyLock},
+    sync::{atomic::AtomicU32, Arc, LazyLock},
     time::Duration,
 };
 
 use clap::Parser;
 use dashmap::{DashMap, DashSet};
-use protocol::{PacketHbAgent, ReqAgentBuild, ReqAgentLogin, RspAgentBuild, RspAgentLoginOk};
+use protocol::{
+    PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
+    RspAgentLoginOk,
+};
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpListener, TcpStream},
@@ -44,16 +47,18 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqAgentLogin {});
-        receiving(link).await
+        receiving(link, args).await
     });
     Ok(())
 }
 
-async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
+async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
     let mut handler = Handler {
         handle: link.handle().clone(),
         conns: Arc::new(DashMap::new()),
         listens: Arc::new(DashSet::new()),
+        seed: Arc::new(AtomicU32::new(0)),
+        args,
     };
     loop {
         tokio::select! {
@@ -86,8 +91,10 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
 
 struct Handler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    conns: Arc<DashMap<u32, TcpStream>>,
+    conns: Arc<DashMap<(u32, u32), TcpStream>>,
     listens: Arc<DashSet<u16>>,
+    seed: Arc<AtomicU32>,
+    args: Args,
 }
 
 impl RegistryInit for Handler {
@@ -133,6 +140,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let handle = self.handle.clone();
             let conns = self.conns.clone();
             let listens = self.listens.clone();
+            let seed = self.seed.clone();
 
             tokio::spawn(async move {
                 if listens.insert(pkt.port) {
@@ -141,12 +149,14 @@ impl PacketProc<ReqAgentBuild> for Handler {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
                                 let _ = stream.set_linger(None);
-                                conns.insert(pkt.id, stream);
+                                let sid = seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                conns.insert((pkt.id, sid), stream);
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
                                     RspAgentBuild {
                                         id: pkt.id,
+                                        sid,
                                         ok: true
                                     }
                                 );
@@ -157,6 +167,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                 handle,
                                 RspAgentBuild {
                                     id: pkt.id,
+                                    sid: 0,
                                     ok: false
                                 }
                             );
@@ -165,6 +176,25 @@ impl PacketProc<ReqAgentBuild> for Handler {
                     }
                 }
             });
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<ReqNewConnectionAgent> for Handler {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, pkt: Box<ReqNewConnectionAgent>) -> Self::Output<'_> {
+        async move {
+            if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await {
+                if let Some((_, mut local)) = self.conns.remove(&(pkt.id, pkt.sid)) {
+                    let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                } else {
+                    // TODO
+                }
+            } else {
+                // TODO
+            }
             Ok(())
         }
     }
