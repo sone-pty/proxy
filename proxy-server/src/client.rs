@@ -96,10 +96,13 @@ impl PacketProc<ReqClientLogin> for Client {
                 }
             });
 
-            let _ = self.rx_agent.changed().await;
-            let agent_hd = self.rx_agent.borrow_and_update();
-            agent_hd.as_ref().map(|v| {
-                let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+            let mut rx_agent = self.rx_agent.clone();
+            tokio::spawn(async move {
+                let _ = rx_agent.changed().await;
+                let agent_hd = rx_agent.borrow_and_update();
+                agent_hd.as_ref().map(|v| {
+                    let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+                });
             });
             Ok(())
         }
