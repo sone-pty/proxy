@@ -116,6 +116,7 @@ impl PacketProc<RspNewConnFailedClient> for Client {
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
             CLIENTS.remove(pkt.id);
+            // TODO
             Ok(())
         }
     }

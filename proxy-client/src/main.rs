@@ -140,7 +140,6 @@ impl PacketProc<ReqNewConnectionClient> for Client {
 
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         async move {
-            println!("Client: New Conn");
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
                 {
@@ -149,7 +148,9 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                         .await
                         .is_ok()
                     {
-                        let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                        tokio::spawn(async move {
+                            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                        });
                     } else {
                         println!("Send Pkt Id to Server Failed.");
                     }
