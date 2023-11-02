@@ -14,7 +14,7 @@ use clap::Parser;
 use dashmap::{DashMap, DashSet};
 use protocol::{
     compose, PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
-    RspAgentLoginOk,
+    RspAgentLoginOk, RspClientNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -117,6 +117,7 @@ impl RegistryInit for Handler {
         register.insert::<PacketHbAgent>();
         register.insert::<RspAgentLoginOk>();
         register.insert::<ReqAgentBuild>();
+        register.insert::<RspClientNotFound>();
     }
 }
 
@@ -217,6 +218,18 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
             } else {
                 // TODO
             }
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<RspClientNotFound> for Handler {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, _: Box<RspClientNotFound>) -> Self::Output<'_> {
+        async {
+            // TODO
+            println!("Client Not Found");
             Ok(())
         }
     }

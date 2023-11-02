@@ -139,6 +139,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
 
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         async move {
+            println!("Client: New Conn");
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
                 {
@@ -155,6 +156,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     println!("Connect Remote Server Failed.");
                 }
             } else {
+                println!("Connect Target Failed");
                 let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
             }
             Ok(())

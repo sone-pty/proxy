@@ -4,23 +4,19 @@ use protocol::{
     PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
     RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
 };
-use tokio::{io::BufReader, net::tcp::OwnedReadHalf, sync::watch::Sender};
+use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ConnInfo, CLIENTS, CONNS};
+use crate::{conn::ConnInfo, CHANNEL, CLIENTS, CONNS};
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx: Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
 }
 
 impl Agent {
-    pub fn new(
-        handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-        sx: Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
-    ) -> Self {
-        Self { handle, sx }
+    pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
+        Self { handle }
     }
 }
 
@@ -51,7 +47,7 @@ impl PacketProc<ReqAgentLogin> for Agent {
     fn proc(&mut self, _: Box<ReqAgentLogin>) -> Self::Output<'_> {
         async {
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
-            let _ = self.sx.send(Some(self.handle.clone()));
+            CHANNEL.0.send_replace(Some(self.handle.clone()));
             Ok(())
         }
     }

@@ -98,12 +98,11 @@ impl PacketProc<ReqClientLogin> for Client {
 
             let mut rx_agent = self.rx_agent.clone();
             tokio::spawn(async move {
-                if rx_agent.borrow_and_update().is_none() {
+                if rx_agent.borrow().is_none() {
                     let _ = rx_agent.changed().await;
                 }
                 rx_agent.borrow().as_ref().map(|v| {
                     let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
-                    println!("Request build agent.");
                 });
             });
             Ok(())
