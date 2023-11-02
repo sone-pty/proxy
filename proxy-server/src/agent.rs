@@ -8,7 +8,7 @@ use tokio::{io::BufReader, net::tcp::OwnedReadHalf, sync::watch::Sender};
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::ROUTES;
+use crate::{conn::ConnInfo, CLIENTS, CONNS};
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -71,9 +71,16 @@ impl PacketProc<RspAgentBuild> for Agent {
 
     fn proc(&mut self, pkt: Box<RspAgentBuild>) -> Self::Output<'_> {
         async move {
-            let client = ROUTES.get_client(pkt.id);
+            let client = CLIENTS.get_client(pkt.id);
             if pkt.ok && client.is_some() {
-                let _ = send_pkt!(client.unwrap(), ReqNewConnectionClient { id: pkt.id });
+                CONNS.insert(ConnInfo::new(pkt.sid));
+                let _ = send_pkt!(
+                    client.unwrap(),
+                    ReqNewConnectionClient {
+                        id: pkt.id,
+                        sid: pkt.sid
+                    }
+                );
                 let _ = send_pkt!(
                     self.handle,
                     ReqNewConnectionAgent {
@@ -83,10 +90,9 @@ impl PacketProc<RspAgentBuild> for Agent {
                 );
             } else if !pkt.ok && client.is_some() {
                 let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
-                ROUTES.remove(pkt.id);
+                CLIENTS.remove(pkt.id);
             } else {
                 let _ = send_pkt!(self.handle, RspClientNotFound {});
-                ROUTES.remove(pkt.id);
             }
             Ok(())
         }

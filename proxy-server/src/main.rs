@@ -8,7 +8,7 @@ use std::{sync::LazyLock, time::Duration};
 use agent::Agent;
 use clap::Parser;
 use client::Client;
-use conn::Conns;
+use conn::{ClientConns, Conns};
 use protocol::{get_id, is_client, BOUDARY};
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -23,7 +23,8 @@ mod conn;
 
 static REGISTRY_CLIENT: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 static REGISTRY_AGENT: LazyLock<Registry<Agent>> = LazyLock::new(Registry::new);
-static ROUTES: LazyLock<Conns> = LazyLock::new(|| Conns::new());
+static CLIENTS: LazyLock<ClientConns> = LazyLock::new(|| ClientConns::new());
+static CONNS: LazyLock<Conns> = LazyLock::new(|| Conns::new());
 
 #[derive(Parser)]
 struct Args {
@@ -94,14 +95,15 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             _ = async {
                                 if let Ok(data) = stream.read_compressed_u64().await {
                                     let id = get_id(&data);
-                                    let routes = &*ROUTES;
+                                    let conns = &*CONNS;
 
                                     if is_client(&data) {
-                                        routes.get_rx(id).map(async move |rx| {
+                                        conns.get_rx(id).map(async move |rx| {
                                             unsafe {
                                                 let guard = &mut *rx.get();
                                                 match guard.recv().await {
                                                     Some(mut peer) => {
+                                                        CONNS.remove(id);
                                                         let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
                                                     },
                                                     _ => {}
@@ -109,7 +111,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                             }
                                         });
                                     } else {
-                                        routes.get_sx(id).map(async move |sx| {
+                                        conns.get_sx(id).map(async move |sx| {
                                             let _ = sx.send(stream).await;
                                         });
                                     }

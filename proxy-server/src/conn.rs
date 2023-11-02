@@ -9,12 +9,12 @@ use tokio::{
     sync::mpsc::{Receiver, Sender},
 };
 
-pub struct Conns {
+pub struct ClientConns {
     next: AtomicU32,
-    conns: DashMap<u32, ConnInfo>,
+    conns: DashMap<u32, ClientInfo>,
 }
 
-impl Conns {
+impl ClientConns {
     pub fn new() -> Self {
         Self {
             // 0 is flag
@@ -32,7 +32,7 @@ impl Conns {
         prev
     }
 
-    pub fn insert(&self, info: ConnInfo) -> u32 {
+    pub fn insert(&self, info: ClientInfo) -> u32 {
         let id = info.id;
         match self.conns.entry(id) {
             dashmap::mapref::entry::Entry::Vacant(e) => {
@@ -48,6 +48,48 @@ impl Conns {
     pub fn get_client(&self, id: u32) -> Option<vnsvrbase::tokio_ext::tcp_link::Handle> {
         let v = self.conns.get(&id).take();
         v.map_or(None, |v| Some(v.client.clone()))
+    }
+
+    pub fn remove(&self, id: u32) {
+        self.conns.remove(&id);
+    }
+}
+
+#[allow(dead_code)]
+pub struct ClientInfo {
+    id: u32,
+    port: u16,
+    client: vnsvrbase::tokio_ext::tcp_link::Handle,
+}
+
+impl ClientInfo {
+    pub fn new(id: u32, port: u16, client: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
+        Self { id, port, client }
+    }
+}
+
+pub struct Conns {
+    conns: DashMap<u32, ConnInfo>,
+}
+
+impl Conns {
+    pub fn new() -> Self {
+        Self {
+            conns: DashMap::new(),
+        }
+    }
+
+    pub fn insert(&self, info: ConnInfo) -> u32 {
+        let id = info.id;
+        match self.conns.entry(id) {
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(info);
+            }
+            _ => {
+                unreachable!()
+            }
+        }
+        id
     }
 
     pub fn get_rx(&self, id: u32) -> Option<Arc<SyncUnsafeCell<Receiver<TcpStream>>>> {
@@ -68,19 +110,15 @@ impl Conns {
 #[allow(dead_code)]
 pub struct ConnInfo {
     id: u32,
-    port: u16,
-    client: vnsvrbase::tokio_ext::tcp_link::Handle,
     sx: Arc<Sender<TcpStream>>,
     rx: Arc<SyncUnsafeCell<Receiver<TcpStream>>>,
 }
 
 impl ConnInfo {
-    pub fn new(id: u32, port: u16, client: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
+    pub fn new(id: u32) -> Self {
         let (sx, rx) = tokio::sync::mpsc::channel(10);
         Self {
             id,
-            port,
-            client,
             sx: Arc::new(sx),
             rx: Arc::new(SyncUnsafeCell::new(rx)),
         }

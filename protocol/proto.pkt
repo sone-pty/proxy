@@ -16,6 +16,7 @@ response<3> RspClientLoginFailed {}
 // server->client: 构建数据链路
 request<4> ReqNewConnectionClient {
     u32 id;
+    u32 sid;
 }
 
 // client->server: 本地Target连接失败，构建路径失败

@@ -143,7 +143,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
                 {
                     if remote
-                        .write_compressed_u64(compose(pkt.id, true))
+                        .write_compressed_u64(compose(pkt.sid, true))
                         .await
                         .is_ok()
                     {

@@ -13,7 +13,7 @@ use std::{
 use clap::Parser;
 use dashmap::{DashMap, DashSet};
 use protocol::{
-    PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
+    compose, PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
     RspAgentLoginOk,
 };
 use tokio::{
@@ -21,7 +21,7 @@ use tokio::{
     net::{tcp::OwnedReadHalf, TcpListener, TcpStream},
 };
 use vnpkt::tokio_ext::{
-    io::AsyncReadExt,
+    io::{AsyncReadExt, AsyncWriteExt},
     registry::{PacketProc, Registry, RegistryInit},
 };
 use vnsvrbase::{
@@ -199,10 +199,19 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
     fn proc(&mut self, pkt: Box<ReqNewConnectionAgent>) -> Self::Output<'_> {
         async move {
             if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await {
-                if let Some((_, mut local)) = self.conns.remove(&(pkt.id, pkt.sid)) {
-                    let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
-                } else {
-                    // TODO
+                if remote
+                    .write_compressed_u64(compose(pkt.sid, false))
+                    .await
+                    .is_ok()
+                {
+                    match self.conns.remove(&(pkt.id, pkt.sid)) {
+                        Some((_, mut local)) => {
+                            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                        }
+                        _ => {
+                            // TODO
+                        }
+                    }
                 }
             } else {
                 // TODO

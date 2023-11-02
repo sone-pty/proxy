@@ -9,7 +9,7 @@ use tokio::{
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ConnInfo, ROUTES};
+use crate::{conn::ClientInfo, CLIENTS};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -59,9 +59,13 @@ impl PacketProc<ReqClientLogin> for Client {
 
     fn proc(&mut self, pkt: Box<ReqClientLogin>) -> Self::Output<'_> {
         async move {
-            let id = ROUTES.insert(ConnInfo::new(ROUTES.next(), pkt.port, self.handle.clone()));
+            let id = CLIENTS.insert(ClientInfo::new(
+                CLIENTS.next(),
+                pkt.port,
+                self.handle.clone(),
+            ));
             let handle = self.handle.clone();
-            let routes = &*ROUTES;
+            let routes = &*CLIENTS;
             let (tsx, trx) = channel(false);
             self.sx_clients.insert(id, tsx);
 
@@ -107,7 +111,7 @@ impl PacketProc<RspNewConnFailedClient> for Client {
 
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
-            ROUTES.remove(pkt.id);
+            CLIENTS.remove(pkt.id);
             Ok(())
         }
     }
