@@ -1,12 +1,9 @@
-use std::{
-    cell::SyncUnsafeCell,
-    sync::{atomic::AtomicU32, Arc},
-};
+use std::sync::atomic::AtomicU32;
 
 use dashmap::DashMap;
 use tokio::{
     net::TcpStream,
-    sync::mpsc::{Receiver, Sender},
+    sync::oneshot::{Receiver, Sender},
 };
 
 pub struct ClientConns {
@@ -92,14 +89,14 @@ impl Conns {
         id
     }
 
-    pub fn get_rx(&self, id: u32) -> Option<Arc<SyncUnsafeCell<Receiver<TcpStream>>>> {
-        let v = self.conns.get(&id).take();
-        v.map_or(None, |v| Some(v.rx.clone()))
+    pub fn get_rx(&self, id: u32) -> Option<Receiver<TcpStream>> {
+        let mut v = self.conns.get_mut(&id).take();
+        v.as_mut().map_or(None, |v| v.rx.take())
     }
 
-    pub fn get_sx(&self, id: u32) -> Option<Arc<Sender<TcpStream>>> {
-        let v = self.conns.get(&id).take();
-        v.map_or(None, |v| Some(v.sx.clone()))
+    pub fn get_sx(&self, id: u32) -> Option<Sender<TcpStream>> {
+        let mut v = self.conns.get_mut(&id).take();
+        v.as_mut().map_or(None, |v| v.sx.take())
     }
 
     pub fn remove(&self, id: u32) {
@@ -110,17 +107,17 @@ impl Conns {
 #[allow(dead_code)]
 pub struct ConnInfo {
     id: u32,
-    sx: Arc<Sender<TcpStream>>,
-    rx: Arc<SyncUnsafeCell<Receiver<TcpStream>>>,
+    sx: Option<Sender<TcpStream>>,
+    rx: Option<Receiver<TcpStream>>,
 }
 
 impl ConnInfo {
     pub fn new(id: u32) -> Self {
-        let (sx, rx) = tokio::sync::mpsc::channel(10);
+        let (sx, rx) = tokio::sync::oneshot::channel();
         Self {
             id,
-            sx: Arc::new(sx),
-            rx: Arc::new(SyncUnsafeCell::new(rx)),
+            sx: Some(sx),
+            rx: Some(rx),
         }
     }
 }

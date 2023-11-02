@@ -107,27 +107,24 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                     if is_client(&data) {
                                         match conns.get_rx(id) {
                                             Some(rx) => {
-                                                /* unsafe {
-                                                    let guard = &mut *rx.get();
-                                                    match guard.recv().await {
-                                                        Some(mut peer) => {
-                                                            CONNS.remove(id);
-                                                            println!("Conn.{} Begin", id);
-                                                            match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                                Ok(_) => println!("Conn.{} Disconnected", id),
-                                                                Err(e) => println!("Conn.{} Error: {}", id, e)
-                                                            }
-                                                        },
-                                                        _ => {}
-                                                    }
-                                                } */
+                                                match rx.await {
+                                                    Ok(mut peer) => {
+                                                        CONNS.remove(id);
+                                                        println!("Conn.{} Begin", id);
+                                                        match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                            Ok(_) => println!("Conn.{} Disconnected", id),
+                                                            Err(e) => println!("Conn.{} Error: {}", id, e)
+                                                        }
+                                                    },
+                                                    _ => {}
+                                                }
                                             },
                                             _ => {}
                                         }
                                     } else {
                                         match conns.get_sx(id) {
                                             Some(sx) => {
-                                                let _ = sx.send(stream).await;
+                                                let _ = sx.send(stream);
                                             },
                                             _ => {}
                                         }
