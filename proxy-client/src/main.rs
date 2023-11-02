@@ -108,6 +108,7 @@ impl RegistryInit for Client {
     fn init(register: &mut Registry<Self>) {
         register.insert::<PacketHbClient>();
         register.insert::<RspClientLoginFailed>();
+        register.insert::<ReqNewConnectionClient>();
     }
 }
 

@@ -118,6 +118,7 @@ impl RegistryInit for Handler {
         register.insert::<RspAgentLoginOk>();
         register.insert::<ReqAgentBuild>();
         register.insert::<RspClientNotFound>();
+        register.insert::<ReqNewConnectionAgent>();
     }
 }
 
