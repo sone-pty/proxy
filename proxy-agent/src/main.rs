@@ -24,7 +24,10 @@ use vnpkt::tokio_ext::{
     io::AsyncReadExt,
     registry::{PacketProc, Registry, RegistryInit},
 };
-use vnsvrbase::tokio_ext::tcp_link::{send_pkt, TcpLink};
+use vnsvrbase::{
+    process::hook_terminate_signal,
+    tokio_ext::tcp_link::{send_pkt, TcpLink},
+};
 
 static REGISTRY: LazyLock<Registry<Handler>> = LazyLock::new(Registry::new);
 
@@ -33,13 +36,22 @@ struct Args {
     server: String,
 }
 
-fn main() -> std::io::Result<()> {
+fn main() {
     let args = Args::parse();
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_io()
         .enable_time()
-        .build()?;
-    rt.block_on(main_loop(args))
+        .build()
+        .unwrap();
+    let (quit_tx, mut quit_rx) = tokio::sync::watch::channel(false);
+    hook_terminate_signal(Some(move || {
+        let _ = quit_tx.send(true);
+    }));
+
+    rt.block_on(async {
+        let _ = main_loop(args).await;
+        let _ = quit_rx.changed().await;
+    });
 }
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
