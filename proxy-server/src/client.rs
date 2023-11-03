@@ -78,19 +78,21 @@ impl PacketProc<ReqClientLogin> for Client {
                         _ = rx.changed() => {
                             let id = *rx.borrow();
                             if id > 0 {
+                                println!("Client.{} disconnected", id);
                                 clients.remove(id);
                                 sx_clients.remove(&id);
-                                println!("Client.{} disconnected", id);
+                                handle.close();
                                 break 'hb;
                             }
                         }
-                        _ = async {
+                        ret = async {
                             match send_pkt!(handle, PacketHbClient {id}) {
                                 Err(_) => {
                                     println!("Client.{} disconnected", id);
                                     clients.remove(id);
                                     sx_clients.remove(&id);
                                     handle.close();
+                                    return false;
                                 }
                                 _ => {}
                             }
@@ -106,7 +108,12 @@ impl PacketProc<ReqClientLogin> for Client {
                                     }
                                 }
                             });
-                        } => {}
+                            true
+                        } => {
+                            if !ret {
+                                break 'hb;
+                            }
+                        }
                     }
                     // HB interval
                     tokio::time::sleep(Duration::from_secs(10)).await;
@@ -132,9 +139,8 @@ impl PacketProc<RspNewConnFailedClient> for Client {
 
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
-            CLIENTS.remove(pkt.id);
-            self.sx_clients.remove(&pkt.id);
-            // TODO
+            println!("Client.{} disconnected", pkt.id);
+            self.handle.close();
             Ok(())
         }
     }

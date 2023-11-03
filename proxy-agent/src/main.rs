@@ -95,7 +95,9 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
                 }
             } => {
                 if let Err(e) = res {
+                    link.handle().close();
                     eprintln!("error: {}", e);
+                    exit(-1);
                 }
             }
         }
