@@ -160,23 +160,27 @@ impl PacketProc<ReqAgentBuild> for Handler {
             tokio::spawn(async move {
                 if listens.insert(pkt.port) {
                     match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
-                        Ok(listener) => loop {
-                            if let Ok((stream, _)) = listener.accept().await {
-                                let _ = stream.set_nodelay(true);
-                                let _ = stream.set_linger(None);
-                                let sid = seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                conns.insert((pkt.id, sid), stream);
-                                // send to server
-                                let _ = send_pkt!(
-                                    handle,
-                                    RspAgentBuild {
-                                        id: pkt.id,
-                                        sid,
-                                        ok: true
-                                    }
-                                );
+                        Ok(listener) => {
+                            loop {
+                                if let Ok((stream, _)) = listener.accept().await {
+                                    let _ = stream.set_nodelay(true);
+                                    let _ = stream.set_linger(None);
+                                    let sid =
+                                        seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                    conns.insert((pkt.id, sid), stream);
+                                    println!("Local Conn.{} Build", sid);
+                                    // send to server
+                                    let _ = send_pkt!(
+                                        handle,
+                                        RspAgentBuild {
+                                            id: pkt.id,
+                                            sid,
+                                            ok: true
+                                        }
+                                    );
+                                }
                             }
-                        },
+                        }
                         _ => {
                             let _ = send_pkt!(
                                 handle,
