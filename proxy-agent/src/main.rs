@@ -11,7 +11,7 @@ use std::{
 };
 
 use clap::Parser;
-use dashmap::{DashMap, DashSet};
+use dashmap::DashMap;
 use protocol::{
     compose, PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
     RspAgentLoginOk, RspClientNotFound,
@@ -69,7 +69,6 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
     let mut handler = Handler {
         handle: link.handle().clone(),
         conns: Arc::new(DashMap::new()),
-        listens: Arc::new(DashSet::new()),
         seed: Arc::new(AtomicU32::new(0)),
         args,
     };
@@ -107,7 +106,6 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
 struct Handler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
     conns: Arc<DashMap<(u32, u32), TcpStream>>,
-    listens: Arc<DashSet<u16>>,
     seed: Arc<AtomicU32>,
     args: Args,
 }
@@ -156,44 +154,39 @@ impl PacketProc<ReqAgentBuild> for Handler {
         async {
             let handle = self.handle.clone();
             let conns = self.conns.clone();
-            let listens = self.listens.clone();
             let seed = self.seed.clone();
 
             tokio::spawn(async move {
-                if listens.insert(pkt.port) {
-                    match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
-                        Ok(listener) => {
-                            loop {
-                                if let Ok((stream, _)) = listener.accept().await {
-                                    let _ = stream.set_nodelay(true);
-                                    let _ = stream.set_linger(None);
-                                    let sid =
-                                        seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                                    conns.insert((pkt.id, sid), stream);
-                                    println!("Local Conn.{} Build", sid);
-                                    // send to server
-                                    let _ = send_pkt!(
-                                        handle,
-                                        RspAgentBuild {
-                                            id: pkt.id,
-                                            sid,
-                                            ok: true
-                                        }
-                                    );
-                                }
+                match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
+                    Ok(listener) => {
+                        loop {
+                            if let Ok((stream, _)) = listener.accept().await {
+                                let _ = stream.set_nodelay(true);
+                                let _ = stream.set_linger(None);
+                                let sid = seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                conns.insert((pkt.id, sid), stream);
+                                println!("Local Conn.{} Build", sid);
+                                // send to server
+                                let _ = send_pkt!(
+                                    handle,
+                                    RspAgentBuild {
+                                        id: pkt.id,
+                                        sid,
+                                        ok: true
+                                    }
+                                );
                             }
                         }
-                        _ => {
-                            let _ = send_pkt!(
-                                handle,
-                                RspAgentBuild {
-                                    id: pkt.id,
-                                    sid: 0,
-                                    ok: false
-                                }
-                            );
-                            listens.remove(&pkt.port);
-                        }
+                    }
+                    _ => {
+                        let _ = send_pkt!(
+                            handle,
+                            RspAgentBuild {
+                                id: pkt.id,
+                                sid: 0,
+                                ok: false
+                            }
+                        );
                     }
                 }
             });
