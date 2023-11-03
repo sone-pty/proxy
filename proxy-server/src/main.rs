@@ -96,31 +96,33 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                     let _ = stream.set_nodelay(true);
                     let _ = stream.set_linger(None);
 
-                    handle.spawn(async {
+                    handle.spawn(async move {
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                            _ = async {
+                            _ = async move {
                                 if let Ok(data) = stream.read_compressed_u64().await {
                                     let id = get_id(&data);
                                     let conns = &*CONNS;
 
                                     if is_client(&data) {
-                                        match conns.get_rx(id) {
-                                            Some(rx) => {
-                                                match rx.await {
-                                                    Ok(mut peer) => {
-                                                        CONNS.remove(id);
-                                                        println!("Conn.{} Begin", id);
-                                                        match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                            Ok(_) => println!("Conn.{} Disconnected", id),
-                                                            Err(e) => println!("Conn.{} Error: {}", id, e)
-                                                        }
-                                                    },
-                                                    _ => {}
-                                                }
-                                            },
-                                            _ => {}
-                                        }
+                                        tokio::spawn(async move {
+                                            match conns.get_rx(id) {
+                                                Some(rx) => {
+                                                    match rx.await {
+                                                        Ok(mut peer) => {
+                                                            CONNS.remove(id);
+                                                            println!("Conn.{} Begin", id);
+                                                            match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                                Ok(_) => println!("Conn.{} Disconnected", id),
+                                                                Err(e) => println!("Conn.{} Error: {}", id, e)
+                                                            }
+                                                        },
+                                                        _ => {}
+                                                    }
+                                                },
+                                                _ => {}
+                                            }
+                                        });
                                     } else {
                                         match conns.get_sx(id) {
                                             Some(sx) => {

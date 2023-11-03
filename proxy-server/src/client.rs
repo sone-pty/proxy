@@ -1,5 +1,6 @@
-use std::{collections::HashMap, future::Future, time::Duration};
+use std::{future::Future, sync::Arc, time::Duration};
 
+use dashmap::DashMap;
 use protocol::{PacketHbClient, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient};
 use tokio::{
     io::BufReader,
@@ -13,7 +14,7 @@ use crate::{conn::ClientInfo, CLIENTS};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx_clients: HashMap<u32, Sender<bool>>,
+    sx_clients: Arc<DashMap<u32, Sender<bool>>>,
     rx_agent: Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
 }
 
@@ -24,7 +25,7 @@ impl Client {
     ) -> Self {
         Self {
             handle,
-            sx_clients: HashMap::new(),
+            sx_clients: Arc::new(DashMap::new()),
             rx_agent,
         }
     }
@@ -47,7 +48,7 @@ impl PacketProc<PacketHbClient> for Client {
         async move {
             self.sx_clients.get(&pkt.id).map(|sx| {
                 let now = *sx.borrow();
-                let _ = sx.send(!now);
+                sx.send_replace(!now);
             });
             Ok(())
         }
@@ -65,27 +66,41 @@ impl PacketProc<ReqClientLogin> for Client {
                 self.handle.clone(),
             ));
             let handle = self.handle.clone();
-            let routes = &*CLIENTS;
+            let clients = &*CLIENTS;
+            let sx_clients = self.sx_clients.clone();
             let (tsx, trx) = channel(false);
             self.sx_clients.insert(id, tsx);
 
             tokio::spawn(async move {
-                loop {
+                'hb: loop {
                     let (sx, mut rx) = channel(0);
                     tokio::select! {
                         _ = rx.changed() => {
                             let id = *rx.borrow();
-                            routes.remove(id);
-                            break;
+                            if id > 0 {
+                                clients.remove(id);
+                                sx_clients.remove(&id);
+                                println!("Client.{} disconnected", id);
+                                break 'hb;
+                            }
                         }
                         _ = async {
-                            tokio::time::sleep(Duration::from_secs(10)).await;
-                            let _ = send_pkt!(handle, PacketHbClient {id});
+                            match send_pkt!(handle, PacketHbClient {id}) {
+                                Err(_) => {
+                                    println!("Client.{} disconnected", id);
+                                    clients.remove(id);
+                                    sx_clients.remove(&id);
+                                    handle.close();
+                                }
+                                _ => {}
+                            }
                             // check heartbeat
                             let mut hbrx = trx.clone();
                             tokio::spawn(async move {
                                 tokio::select! {
-                                    _ = hbrx.changed() => {}
+                                    _ = hbrx.changed() => {
+                                        hbrx.borrow_and_update();
+                                    }
                                     _ = tokio::time::sleep(Duration::from_secs(5)) => {
                                         let _ = sx.send(id);
                                     }
@@ -93,6 +108,8 @@ impl PacketProc<ReqClientLogin> for Client {
                             });
                         } => {}
                     }
+                    // HB interval
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             });
 
@@ -116,6 +133,7 @@ impl PacketProc<RspNewConnFailedClient> for Client {
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
             CLIENTS.remove(pkt.id);
+            self.sx_clients.remove(&pkt.id);
             // TODO
             Ok(())
         }
