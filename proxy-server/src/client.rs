@@ -10,7 +10,7 @@ use tokio::{
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ClientInfo, CLIENTS};
+use crate::{conn::ClientInfo, CHANNEL, CLIENTS};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -122,12 +122,16 @@ impl PacketProc<ReqClientLogin> for Client {
 
             let mut rx_agent = self.rx_agent.clone();
             tokio::spawn(async move {
-                if rx_agent.borrow().is_none() {
-                    let _ = rx_agent.changed().await;
+                match rx_agent.wait_for(|v| v.is_some()).await {
+                    Ok(agent) => {
+                        agent.as_ref().map(|v| {
+                            let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+                        });
+                    }
+                    _ => {}
                 }
-                rx_agent.borrow().as_ref().map(|v| {
-                    let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
-                });
+                // reset
+                CHANNEL.0.send_replace(None);
             });
             Ok(())
         }
