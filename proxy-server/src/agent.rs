@@ -37,8 +37,17 @@ impl PacketProc<PacketHbAgent> for Agent {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
-        async {
-            let _ = send_pkt!(self.handle, pkt);
+        let cid = pkt.id;
+        async move {
+            match send_pkt!(self.handle, pkt) {
+                Ok(_) => {}
+                Err(_) => {
+                    self.handle.close();
+                    if cid > 0 {
+                        CLIENTS.get_client(cid).map(|v| v.close());
+                    }
+                }
+            }
             Ok(())
         }
     }

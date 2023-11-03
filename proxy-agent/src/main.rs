@@ -71,6 +71,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         conns: Arc::new(DashMap::new()),
         seed: Arc::new(AtomicU32::new(0)),
         args,
+        cid: Arc::new(AtomicU32::new(0)),
     };
     loop {
         tokio::select! {
@@ -108,6 +109,7 @@ struct Handler {
     conns: Arc<DashMap<(u32, u32), TcpStream>>,
     seed: Arc<AtomicU32>,
     args: Args,
+    cid: Arc<AtomicU32>,
 }
 
 impl RegistryInit for Handler {
@@ -136,10 +138,17 @@ impl PacketProc<RspAgentLoginOk> for Handler {
     fn proc(&mut self, _: Box<RspAgentLoginOk>) -> Self::Output<'_> {
         async {
             let handle = self.handle.clone();
+            let cid = self.cid.clone();
+
             tokio::spawn(async move {
                 loop {
+                    let _ = send_pkt!(
+                        handle,
+                        PacketHbAgent {
+                            id: cid.load(std::sync::atomic::Ordering::Acquire)
+                        }
+                    );
                     tokio::time::sleep(Duration::from_secs(10)).await;
-                    let _ = send_pkt!(handle, PacketHbAgent {});
                 }
             });
             Ok(())
@@ -155,6 +164,8 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let handle = self.handle.clone();
             let conns = self.conns.clone();
             let seed = self.seed.clone();
+            self.cid.store(pkt.id, std::sync::atomic::Ordering::Release);
+            let _ = send_pkt!(self.handle, PacketHbAgent { id: pkt.id });
 
             tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
@@ -163,7 +174,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
                                 let _ = stream.set_linger(None);
-                                let sid = seed.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                                let sid = seed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 conns.insert((pkt.id, sid), stream);
                                 println!("Local Conn.{} Build", sid);
                                 // send to server

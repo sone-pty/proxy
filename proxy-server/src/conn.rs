@@ -81,6 +81,7 @@ impl ClientInfo {
     }
 }
 
+#[allow(dead_code)]
 pub struct Conns {
     cid: u32,
     conns: DashMap<u32, ConnInfo>,

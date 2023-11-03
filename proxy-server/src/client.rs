@@ -10,7 +10,7 @@ use tokio::{
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ClientInfo, CHANNEL, CLIENTS};
+use crate::{conn::ClientInfo, CHANNEL, CLIENTS, CONNS};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -83,6 +83,7 @@ impl PacketProc<ReqClientLogin> for Client {
                                 CLIENTS.get_agent(id).map(|v| v.close());
                                 clients.remove(id);
                                 sx_clients.remove(&id);
+                                CONNS.remove(&id);
                                 break 'hb;
                             }
                         }
@@ -94,6 +95,7 @@ impl PacketProc<ReqClientLogin> for Client {
                                     CLIENTS.get_agent(id).map(|v| v.close());
                                     clients.remove(id);
                                     sx_clients.remove(&id);
+                                    CONNS.remove(&id);
                                     return false;
                                 }
                                 _ => {}

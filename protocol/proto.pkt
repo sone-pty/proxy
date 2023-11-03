@@ -31,7 +31,9 @@ packet<100> PacketBoudary;
 // ---------------------------Agent--------------------
 
 // Agent侧心跳
-packet<101> PacketHbAgent;
+packet<101> PacketHbAgent {
+    u32 id;
+}
 
 // server向Agent申请监听请求
 request<102> ReqAgentBuild {
