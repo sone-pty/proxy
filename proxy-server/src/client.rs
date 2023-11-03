@@ -79,9 +79,10 @@ impl PacketProc<ReqClientLogin> for Client {
                             let id = *rx.borrow();
                             if id > 0 {
                                 println!("Client.{} disconnected", id);
+                                handle.close();
+                                CLIENTS.get_agent(id).map(|v| v.close());
                                 clients.remove(id);
                                 sx_clients.remove(&id);
-                                handle.close();
                                 break 'hb;
                             }
                         }
@@ -89,9 +90,10 @@ impl PacketProc<ReqClientLogin> for Client {
                             match send_pkt!(handle, PacketHbClient {id}) {
                                 Err(_) => {
                                     println!("Client.{} disconnected", id);
+                                    handle.close();
+                                    CLIENTS.get_agent(id).map(|v| v.close());
                                     clients.remove(id);
                                     sx_clients.remove(&id);
-                                    handle.close();
                                     return false;
                                 }
                                 _ => {}
@@ -126,6 +128,7 @@ impl PacketProc<ReqClientLogin> for Client {
                     Ok(agent) => {
                         agent.as_ref().map(|v| {
                             let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+                            CLIENTS.set_agent(id, v.clone());
                         });
                     }
                     _ => {}
@@ -145,6 +148,7 @@ impl PacketProc<RspNewConnFailedClient> for Client {
         async move {
             println!("Client.{} disconnected", pkt.id);
             self.handle.close();
+            CLIENTS.get_agent(pkt.id).map(|v| v.close());
             Ok(())
         }
     }

@@ -50,6 +50,16 @@ impl ClientConns {
     pub fn remove(&self, id: u32) {
         self.conns.remove(&id);
     }
+
+    pub fn set_agent(&self, id: u32, handle: vnsvrbase::tokio_ext::tcp_link::Handle) {
+        let mut v = self.conns.get_mut(&id).take();
+        v.as_mut().map(|v| v.agent = Some(handle));
+    }
+
+    pub fn get_agent(&self, id: u32) -> Option<vnsvrbase::tokio_ext::tcp_link::Handle> {
+        let v = self.conns.get(&id).take();
+        v.map_or(None, |v| v.agent.clone())
+    }
 }
 
 #[allow(dead_code)]
@@ -57,11 +67,17 @@ pub struct ClientInfo {
     id: u32,
     port: u16,
     client: vnsvrbase::tokio_ext::tcp_link::Handle,
+    agent: Option<vnsvrbase::tokio_ext::tcp_link::Handle>,
 }
 
 impl ClientInfo {
     pub fn new(id: u32, port: u16, client: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
-        Self { id, port, client }
+        Self {
+            id,
+            port,
+            client,
+            agent: None,
+        }
     }
 }
 
