@@ -8,7 +8,10 @@ use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ConnInfo, CHANNEL, CLIENTS, CONNS};
+use crate::{
+    conn::{ConnInfo, Conns},
+    CHANNEL, CLIENTS, CONNS,
+};
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -60,7 +63,18 @@ impl PacketProc<RspAgentBuild> for Agent {
         async move {
             let client = CLIENTS.get_client(pkt.id);
             if pkt.ok && client.is_some() {
-                CONNS.insert(ConnInfo::new(pkt.sid));
+                use dashmap::mapref::entry::Entry;
+                match CONNS.entry(pkt.id) {
+                    Entry::Occupied(e) => {
+                        e.get().insert(ConnInfo::new(pkt.sid));
+                    }
+                    Entry::Vacant(e) => {
+                        let conns = Conns::new(pkt.id);
+                        conns.insert(ConnInfo::new(pkt.sid));
+                        e.insert(conns);
+                    }
+                }
+
                 let _ = send_pkt!(
                     client.unwrap(),
                     ReqNewConnectionClient {

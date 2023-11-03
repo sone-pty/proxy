@@ -82,12 +82,14 @@ impl ClientInfo {
 }
 
 pub struct Conns {
+    cid: u32,
     conns: DashMap<u32, ConnInfo>,
 }
 
 impl Conns {
-    pub fn new() -> Self {
+    pub fn new(cid: u32) -> Self {
         Self {
+            cid,
             conns: DashMap::new(),
         }
     }

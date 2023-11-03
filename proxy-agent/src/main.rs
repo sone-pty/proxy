@@ -208,10 +208,14 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
     fn proc(&mut self, pkt: Box<ReqNewConnectionAgent>) -> Self::Output<'_> {
         async move {
             if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await {
-                if remote
-                    .write_compressed_u64(compose(pkt.sid, false))
-                    .await
-                    .is_ok()
+                if async {
+                    use tokio::io::AsyncWriteExt;
+                    remote.write_u32(pkt.id).await?;
+                    remote.write_compressed_u64(compose(pkt.sid, false)).await?;
+                    std::io::Result::Ok(())
+                }
+                .await
+                .is_ok()
                 {
                     match self.conns.remove(&(pkt.id, pkt.sid)) {
                         Some((_, mut local)) => {

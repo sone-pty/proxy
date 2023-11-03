@@ -145,19 +145,25 @@ impl PacketProc<ReqNewConnectionClient> for Client {
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
                 {
-                    if remote
-                        .write_compressed_u64(compose(pkt.sid, true))
-                        .await
-                        .is_ok()
+                    if async {
+                        use tokio::io::AsyncWriteExt;
+                        remote.write_u32(pkt.id).await?;
+                        remote.write_compressed_u64(compose(pkt.sid, true)).await?;
+                        std::io::Result::Ok(())
+                    }
+                    .await
+                    .is_ok()
                     {
                         tokio::spawn(async move {
                             let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
                         });
                     } else {
                         println!("Send Pkt Id to Server Failed.");
+                        let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
                     }
                 } else {
                     println!("Connect Remote Server Failed.");
+                    let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
                 }
             } else {
                 println!("Connect Target Failed");

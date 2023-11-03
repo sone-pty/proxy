@@ -9,6 +9,7 @@ use agent::Agent;
 use clap::Parser;
 use client::Client;
 use conn::{ClientConns, Conns};
+use dashmap::DashMap;
 use protocol::{get_id, is_client, BOUDARY};
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -27,7 +28,7 @@ mod conn;
 static REGISTRY_CLIENT: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 static REGISTRY_AGENT: LazyLock<Registry<Agent>> = LazyLock::new(Registry::new);
 static CLIENTS: LazyLock<ClientConns> = LazyLock::new(|| ClientConns::new());
-static CONNS: LazyLock<Conns> = LazyLock::new(|| Conns::new());
+static CONNS: LazyLock<DashMap<u32, Conns>> = LazyLock::new(|| DashMap::new());
 static CHANNEL: LazyLock<(
     Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
     Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
@@ -100,36 +101,43 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                         tokio::select! {
                             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                             _ = async move {
-                                if let Ok(data) = stream.read_compressed_u64().await {
-                                    let id = get_id(&data);
-                                    let conns = &*CONNS;
+                                use tokio::io::AsyncReadExt;
+                                if let Ok(cid) = stream.read_u32().await {
+                                    match CONNS.get(&cid) {
+                                        Some(conns) => {
+                                            if let Ok(data) = stream.read_compressed_u64().await {
+                                                let id = get_id(&data);
 
-                                    if is_client(&data) {
-                                        tokio::spawn(async move {
-                                            match conns.get_rx(id) {
-                                                Some(rx) => {
-                                                    match rx.await {
-                                                        Ok(mut peer) => {
-                                                            CONNS.remove(id);
-                                                            println!("Conn.{} Begin", id);
-                                                            match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                                Ok(_) => println!("Conn.{} Disconnected", id),
-                                                                Err(e) => println!("Conn.{} Error: {}", id, e)
-                                                            }
+                                                if is_client(&data) {
+                                                    tokio::spawn(async move {
+                                                        match conns.get_rx(id) {
+                                                            Some(rx) => {
+                                                                match rx.await {
+                                                                    Ok(mut peer) => {
+                                                                        conns.remove(id);
+                                                                        println!("Conn.{} Begin", id);
+                                                                        match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                                            Ok(_) => println!("Conn.{} Disconnected", id),
+                                                                            Err(e) => println!("Conn.{} Error: {}", id, e)
+                                                                        }
+                                                                    },
+                                                                    _ => {}
+                                                                }
+                                                            },
+                                                            _ => {}
+                                                        }
+                                                    });
+                                                } else {
+                                                    match conns.get_sx(id) {
+                                                        Some(sx) => {
+                                                            let _ = sx.send(stream);
                                                         },
                                                         _ => {}
                                                     }
-                                                },
-                                                _ => {}
+                                                }
                                             }
-                                        });
-                                    } else {
-                                        match conns.get_sx(id) {
-                                            Some(sx) => {
-                                                let _ = sx.send(stream);
-                                            },
-                                            _ => {}
-                                        }
+                                        },
+                                        _ => {}
                                     }
                                 }
                             } => {}
