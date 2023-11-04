@@ -48,14 +48,14 @@ fn main() {
     }));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+        .worker_threads(2)
         .enable_time()
         .enable_io()
         .build()
         .unwrap();
 
     let wrt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(1)
+        .worker_threads(2)
         .enable_time()
         .enable_io()
         .build()

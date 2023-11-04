@@ -38,7 +38,8 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    let rt = tokio::runtime::Builder::new_current_thread()
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
         .enable_io()
         .enable_time()
         .build()

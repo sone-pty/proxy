@@ -83,7 +83,6 @@ impl PacketProc<ReqAgentLogin> for Agent {
                                     break;
                                 }
                             }
-                            println!("Enter");
                         }
                         _ = tokio::time::sleep(Duration::from_secs(15)) => {
                             handle.close();
