@@ -69,7 +69,22 @@ impl PacketProc<ReqAgentLogin> for Agent {
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                        _ = rx.changed() => {}
+                        r = rx.changed() => {
+                            match r {
+                                Ok(_) => {
+                                    rx.borrow_and_update();
+                                }
+                                Err(_) => {
+                                    handle.close();
+                                    let cid = rx.borrow();
+                                    if *cid > 0 {
+                                        CLIENTS.get_client(*cid).map(|v| v.close());
+                                    }
+                                    break;
+                                }
+                            }
+                            println!("Enter");
+                        }
                         _ = tokio::time::sleep(Duration::from_secs(15)) => {
                             handle.close();
                             let cid = rx.borrow();
