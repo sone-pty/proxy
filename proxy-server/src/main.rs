@@ -187,3 +187,9 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
     }
     Err(std::io::ErrorKind::InvalidData.into())
 }
+
+pub fn reset() {
+    CLIENTS.clear();
+    CONNS.clear();
+    let _ = CHANNEL.0.send_replace(None);
+}

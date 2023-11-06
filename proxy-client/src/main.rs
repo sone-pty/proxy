@@ -53,7 +53,7 @@ fn main() {
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("Connect Server Success.");
+    println!("Connect Server Success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqClientLogin { port: args.port });
@@ -68,7 +68,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
                 link.handle().close();
-                eprintln!("recv from server time out.");
+                eprintln!("Recv From Server Timeout");
                 exit(-1);
             }
             res = async {
@@ -87,7 +87,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    eprintln!("error: {}", e);
+                    eprintln!("Error: {}", e);
                     exit(-1);
                 }
             }
@@ -132,7 +132,7 @@ impl PacketProc<RspClientLoginFailed> for Client {
 
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
-            println!("Client Login Failed, No Active Proxy Server.");
+            println!("Client Login Failed, No Active Proxy Server");
             // TODO: Retry
             Ok(())
         }
@@ -162,11 +162,11 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                             let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
                         });
                     } else {
-                        println!("Send Pkt Id to Server Failed.");
+                        println!("Send Pkt Id to Server Failed");
                         let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
                     }
                 } else {
-                    println!("Connect Remote Server Failed.");
+                    println!("Connect Remote Server Failed");
                     let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
                 }
             } else {

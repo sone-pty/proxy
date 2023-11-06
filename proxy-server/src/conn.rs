@@ -60,6 +60,10 @@ impl ClientConns {
         let v = self.conns.get(&id).take();
         v.map_or(None, |v| v.agent.clone())
     }
+
+    pub fn clear(&self) {
+        self.conns.clear();
+    }
 }
 
 #[allow(dead_code)]

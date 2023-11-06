@@ -84,7 +84,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
                 link.handle().close();
-                eprintln!("recv from server time out");
+                eprintln!("Recv From Server Timeout");
                 exit(-1);
             }
             res = async {
@@ -103,7 +103,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    eprintln!("error: {}", e);
+                    eprintln!("Error: {}", e);
                     exit(-1);
                 }
             }
@@ -193,7 +193,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                         e.get().insert(sid, stream);
                                     }
                                 }
-                                println!("With Client.{}, Local Conn.{} Build", pkt.id, sid);
+                                println!("In Proxy.{}, Local Conn.{} Build", pkt.id, sid);
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
@@ -295,7 +295,7 @@ impl PacketProc<PacketInfoClientClosed> for Handler {
 
     fn proc(&mut self, pkt: Box<PacketInfoClientClosed>) -> Self::Output<'_> {
         async move {
-            println!("Proxy.{} shutdown", pkt.id);
+            println!("Proxy.{} Shutdown", pkt.id);
             self.conns.remove(&pkt.id);
             if let Some((_, (_, listen, conns))) = PROXYS.remove(&pkt.id) {
                 listen.abort();

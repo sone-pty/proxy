@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, time::Duration};
 
 use protocol::{
     PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
@@ -10,16 +10,17 @@ use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
 use crate::{
     conn::{ConnInfo, Conns},
-    CHANNEL, CLIENTS, CONNS,
+    reset, CHANNEL, CLIENTS, CONNS,
 };
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
+    sx: Option<tokio::sync::watch::Sender<()>>,
 }
 
 impl Agent {
     pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
-        Self { handle }
+        Self { handle, sx: None }
     }
 }
 
@@ -37,11 +38,13 @@ impl PacketProc<PacketHbAgent> for Agent {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
+        self.sx.as_ref().map(|v| v.send_replace(()));
         async move {
             match send_pkt!(self.handle, pkt) {
                 Ok(_) => {}
                 Err(_) => {
                     self.handle.close();
+                    reset();
                 }
             }
             Ok(())
@@ -56,6 +59,34 @@ impl PacketProc<ReqAgentLogin> for Agent {
         async {
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
             CHANNEL.0.send_replace(Some(self.handle.clone()));
+
+            // Check Agent
+            let (sx, mut rx) = tokio::sync::watch::channel(());
+            let handle = self.handle.clone();
+            self.sx = Some(sx);
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        r = rx.changed() => {
+                            match r {
+                                Ok(_) => {
+                                    rx.borrow_and_update();
+                                }
+                                Err(_) => {
+                                    handle.close();
+                                    reset();
+                                    break;
+                                }
+                            }
+                        }
+                        _ = tokio::time::sleep(Duration::from_secs(15)) => {
+                            handle.close();
+                            reset();
+                            break;
+                        }
+                    }
+                }
+            });
             Ok(())
         }
     }

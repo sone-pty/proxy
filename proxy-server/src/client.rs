@@ -80,7 +80,7 @@ impl PacketProc<ReqClientLogin> for Client {
                         _ = rx.changed() => {
                             let id = *rx.borrow();
                             if id > 0 {
-                                println!("Client.{} disconnected", id);
+                                println!("Client.{} Disconnected", id);
                                 handle.close();
                                 // CLIENTS.get_agent(id).map(|v| v.close());
                                 CLIENTS.get_agent(id).map(|v| send_pkt!(v, PacketInfoClientClosed {id}));
@@ -93,7 +93,7 @@ impl PacketProc<ReqClientLogin> for Client {
                         ret = async {
                             match send_pkt!(handle, PacketHbClient {id}) {
                                 Err(_) => {
-                                    println!("Client.{} disconnected", id);
+                                    println!("Client.{} Disconnected", id);
                                     handle.close();
                                     // CLIENTS.get_agent(id).map(|v| v.close());
                                     CLIENTS.get_agent(id).map(|v| send_pkt!(v, PacketInfoClientClosed {id}));
@@ -152,7 +152,7 @@ impl PacketProc<RspNewConnFailedClient> for Client {
 
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
-            println!("Client.{} disconnected", pkt.id);
+            println!("Client.{} Disconnected", pkt.id);
             self.handle.close();
             CLIENTS
                 .get_agent(pkt.id)
