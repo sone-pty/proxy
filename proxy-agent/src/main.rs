@@ -64,7 +64,7 @@ fn main() {
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("Connect Server Success.");
+    println!("Connect Server Success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqAgentLogin {});
@@ -84,7 +84,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(15)) => {
                 link.handle().close();
-                eprintln!("recv from server time out.");
+                eprintln!("recv from server time out");
                 exit(-1);
             }
             res = async {
@@ -151,8 +151,10 @@ impl PacketProc<RspAgentLoginOk> for Handler {
                         Ok(_) => {}
                         Err(_) => {
                             // TODO
+                            break;
                         }
                     }
+                    tokio::time::sleep(Duration::from_secs(10)).await;
                 }
             });
             Ok(())
@@ -191,7 +193,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                         e.get().insert(sid, stream);
                                     }
                                 }
-                                println!("With Client.{}, Local Conn.{} Build.", pkt.id, sid);
+                                println!("With Client.{}, Local Conn.{} Build", pkt.id, sid);
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
@@ -293,6 +295,7 @@ impl PacketProc<PacketInfoClientClosed> for Handler {
 
     fn proc(&mut self, pkt: Box<PacketInfoClientClosed>) -> Self::Output<'_> {
         async move {
+            println!("Proxy.{} shutdown", pkt.id);
             self.conns.remove(&pkt.id);
             if let Some((_, (_, listen, conns))) = PROXYS.remove(&pkt.id) {
                 listen.abort();
