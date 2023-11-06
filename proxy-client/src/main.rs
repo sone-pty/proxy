@@ -6,7 +6,7 @@ use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 
 use clap::Parser;
 use protocol::{
-    compose, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
+    compose, Consts, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
     RspNewConnFailedClient,
 };
 use tokio::{
@@ -27,7 +27,7 @@ static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 #[derive(Parser)]
 pub struct Args {
     local: String,
-    port: u16,
+    service: String,
     server: String,
     server_main_port: u16,
     server_conn_port: u16,
@@ -35,6 +35,12 @@ pub struct Args {
 
 fn main() {
     let args = Args::parse();
+
+    if args.service.len() > Consts::MaxServiceLen as _ {
+        println!("Error: Service Len > {}", Consts::MaxServiceLen as u32);
+        exit(-1);
+    }
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .enable_io()
@@ -56,7 +62,12 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
     println!("Connect Server Success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
-        let _ = send_pkt!(link.handle(), ReqClientLogin { port: args.port });
+        let _ = send_pkt!(
+            link.handle(),
+            ReqClientLogin {
+                service: unsafe { vnpkt::string::String::from_unchecked(args.service.clone()) }
+            }
+        );
         receiving(link, args).await
     });
     Ok(())

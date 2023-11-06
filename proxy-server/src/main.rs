@@ -3,7 +3,14 @@
 #![feature(async_closure)]
 #![feature(sync_unsafe_cell)]
 
-use std::{sync::LazyLock, time::Duration};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    process::exit,
+    str::FromStr,
+    sync::LazyLock,
+    time::Duration,
+};
 
 use agent::Agent;
 use clap::Parser;
@@ -11,6 +18,7 @@ use client::Client;
 use conn::{ClientConns, Conns};
 use dashmap::DashMap;
 use protocol::{get_id, is_client, BOUDARY};
+use serde::Deserialize;
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::{
@@ -33,15 +41,38 @@ static CHANNEL: LazyLock<(
     Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
     Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
 )> = LazyLock::new(|| channel(None));
+static SERVICES: LazyLock<DashMap<String, u16>> = LazyLock::new(|| DashMap::new());
+
+#[derive(Deserialize)]
+struct Services {
+    data: HashMap<String, u16>,
+}
 
 #[derive(Parser)]
 struct Args {
     main_port: u16,
     conn_port: u16,
+    services: String,
 }
 
 fn main() {
     let args = Args::parse();
+
+    let services_path = PathBuf::from_str(&args.services);
+    if services_path.is_err() {
+        println!("Services Not Found");
+        exit(-1);
+    }
+    let services = load(services_path.unwrap());
+    if services.is_err() {
+        println!("Load Services Failed");
+        exit(-1);
+    }
+
+    for v in services.unwrap().data.into_iter() {
+        SERVICES.insert(v.0, v.1);
+    }
+
     let (quit_tx, mut quit_rx) = tokio::sync::watch::channel(false);
     hook_terminate_signal(Some(move || {
         let _ = quit_tx.send(true);
@@ -66,6 +97,15 @@ fn main() {
         quit_rx.changed().await
     })
     .unwrap();
+}
+
+fn load<P: AsRef<Path>>(services: P) -> std::io::Result<Services> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(services)?;
+    let mut content = String::with_capacity(1024);
+    file.read_to_string(&mut content)?;
+    let services = serde_json::from_str(&content)?;
+    Ok(services)
 }
 
 async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<()> {

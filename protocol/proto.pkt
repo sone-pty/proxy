@@ -1,3 +1,7 @@
+enum Consts: uint {
+    MaxServiceLen = 16,
+}
+
 // ---------------------------client--------------------
 
 // client侧心跳
@@ -7,7 +11,7 @@ packet<1> PacketHbClient {
 
 // client向服务器请求代理监听
 request<2> ReqClientLogin {
-    u16 port;
+    string<16> service;
 }
 
 // Agent监听失败时: server->client

@@ -12,7 +12,7 @@ use tokio::{
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ClientInfo, CLIENTS, CONNS};
+use crate::{conn::ClientInfo, CLIENTS, CONNS, SERVICES};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -62,11 +62,14 @@ impl PacketProc<ReqClientLogin> for Client {
 
     fn proc(&mut self, pkt: Box<ReqClientLogin>) -> Self::Output<'_> {
         async move {
-            let id = CLIENTS.insert(ClientInfo::new(
-                CLIENTS.next(),
-                pkt.port,
-                self.handle.clone(),
-            ));
+            let port_wrap = SERVICES.get(pkt.service.as_str());
+            if port_wrap.is_none() {
+                // TODO: No such service
+                return Ok(());
+            }
+            let port = *port_wrap.unwrap();
+
+            let id = CLIENTS.insert(ClientInfo::new(CLIENTS.next(), port, self.handle.clone()));
             let handle = self.handle.clone();
             let clients = &*CLIENTS;
             let sx_clients = self.sx_clients.clone();
@@ -133,7 +136,7 @@ impl PacketProc<ReqClientLogin> for Client {
                 match rx_agent.wait_for(|v| v.is_some()).await {
                     Ok(agent) => {
                         agent.as_ref().map(|v| {
-                            let _ = send_pkt!(v, ReqAgentBuild { port: pkt.port, id });
+                            let _ = send_pkt!(v, ReqAgentBuild { port, id });
                             CLIENTS.set_agent(id, v.clone());
                         });
                     }
