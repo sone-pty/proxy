@@ -29,6 +29,8 @@ pub struct Args {
     local: String,
     port: u16,
     server: String,
+    server_main_port: u16,
+    server_conn_port: u16,
 }
 
 fn main() {
@@ -50,7 +52,7 @@ fn main() {
 }
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
-    let stream = TcpStream::connect((args.server.as_str(), 60010)).await?;
+    let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
     println!("Connect Server Success.");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
@@ -143,7 +145,9 @@ impl PacketProc<ReqNewConnectionClient> for Client {
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         async move {
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
-                if let Ok(mut remote) = TcpStream::connect((self.args.server.as_str(), 60011)).await
+                if let Ok(mut remote) =
+                    TcpStream::connect((self.args.server.as_str(), self.args.server_conn_port))
+                        .await
                 {
                     if async {
                         use tokio::io::AsyncWriteExt;
