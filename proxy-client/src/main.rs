@@ -133,8 +133,8 @@ impl PacketProc<RspClientLoginFailed> for Client {
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
             println!("Client Login Failed, No Active Proxy Server");
-            // TODO: Retry
-            Ok(())
+            self.handle.close();
+            exit(-1);
         }
     }
 }

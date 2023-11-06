@@ -62,6 +62,9 @@ impl ClientConns {
     }
 
     pub fn clear(&self) {
+        for v in self.conns.iter() {
+            v.client.close();
+        }
         self.conns.clear();
     }
 }
