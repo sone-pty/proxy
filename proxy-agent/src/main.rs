@@ -13,12 +13,13 @@ use std::{
 use clap::Parser;
 use dashmap::DashMap;
 use protocol::{
-    compose, PacketHbAgent, ReqAgentBuild, ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild,
-    RspAgentLoginOk, RspClientNotFound,
+    compose, PacketHbAgent, PacketInfoClientClosed, ReqAgentBuild, ReqAgentLogin,
+    ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginOk, RspClientNotFound,
 };
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpListener, TcpStream},
+    task::JoinHandle,
 };
 use vnpkt::tokio_ext::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -30,6 +31,10 @@ use vnsvrbase::{
 };
 
 static REGISTRY: LazyLock<Registry<Handler>> = LazyLock::new(Registry::new);
+static PROXYS: LazyLock<DashMap<u32, (u16, JoinHandle<()>, Vec<JoinHandle<()>>)>> =
+    LazyLock::new(DashMap::new);
+
+type Conns = DashMap<u32, DashMap<u32, TcpStream>>;
 
 #[derive(Parser)]
 struct Args {
@@ -74,7 +79,6 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         conns: Arc::new(DashMap::new()),
         seed: Arc::new(AtomicU32::new(0)),
         args,
-        cid: Arc::new(AtomicU32::new(0)),
     };
     loop {
         tokio::select! {
@@ -109,10 +113,9 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
 
 struct Handler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    conns: Arc<DashMap<(u32, u32), TcpStream>>,
+    conns: Arc<Conns>,
     seed: Arc<AtomicU32>,
     args: Args,
-    cid: Arc<AtomicU32>,
 }
 
 impl RegistryInit for Handler {
@@ -124,6 +127,7 @@ impl RegistryInit for Handler {
         register.insert::<ReqAgentBuild>();
         register.insert::<RspClientNotFound>();
         register.insert::<ReqNewConnectionAgent>();
+        register.insert::<PacketInfoClientClosed>();
     }
 }
 
@@ -141,17 +145,14 @@ impl PacketProc<RspAgentLoginOk> for Handler {
     fn proc(&mut self, _: Box<RspAgentLoginOk>) -> Self::Output<'_> {
         async {
             let handle = self.handle.clone();
-            let cid = self.cid.clone();
-
             tokio::spawn(async move {
                 loop {
-                    let _ = send_pkt!(
-                        handle,
-                        PacketHbAgent {
-                            id: cid.load(std::sync::atomic::Ordering::Acquire)
+                    match send_pkt!(handle, PacketHbAgent {}) {
+                        Ok(_) => {}
+                        Err(_) => {
+                            // TODO
                         }
-                    );
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    }
                 }
             });
             Ok(())
@@ -167,10 +168,10 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let handle = self.handle.clone();
             let conns = self.conns.clone();
             let seed = self.seed.clone();
-            self.cid.store(pkt.id, std::sync::atomic::Ordering::Release);
-            let _ = send_pkt!(self.handle, PacketHbAgent { id: pkt.id });
+            let port = pkt.port;
+            let cid = pkt.id;
 
-            tokio::spawn(async move {
+            let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
                     Ok(listener) => {
                         loop {
@@ -178,8 +179,19 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                 let _ = stream.set_nodelay(true);
                                 let _ = stream.set_linger(None);
                                 let sid = seed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                conns.insert((pkt.id, sid), stream);
-                                println!("Local Conn.{} Build", sid);
+
+                                use dashmap::mapref::entry::Entry;
+                                match conns.entry(pkt.id) {
+                                    Entry::Vacant(e) => {
+                                        let conns = DashMap::new();
+                                        conns.insert(sid, stream);
+                                        e.insert(conns);
+                                    }
+                                    Entry::Occupied(e) => {
+                                        e.get().insert(sid, stream);
+                                    }
+                                }
+                                println!("With Client.{}, Local Conn.{} Build.", pkt.id, sid);
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
@@ -204,6 +216,8 @@ impl PacketProc<ReqAgentBuild> for Handler {
                     }
                 }
             });
+
+            PROXYS.insert(cid, (port, proxy, Vec::new()));
             Ok(())
         }
     }
@@ -226,18 +240,32 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                 .await
                 .is_ok()
                 {
-                    match self.conns.remove(&(pkt.id, pkt.sid)) {
-                        Some((_, mut local)) => {
-                            tokio::spawn(async move {
-                                match tokio::io::copy_bidirectional(&mut local, &mut remote).await {
-                                    Ok(_) => println!("Local Conn Disconnected"),
-                                    Err(e) => println!("Local Conn Error: {}", e),
+                    if let Some(conns) = self.conns.get(&pkt.id) {
+                        match conns.remove(&pkt.sid) {
+                            Some((_, mut local)) => {
+                                let task = tokio::spawn(async move {
+                                    match tokio::io::copy_bidirectional(&mut local, &mut remote)
+                                        .await
+                                    {
+                                        Ok(_) => println!("Local Conn Disconnected"),
+                                        Err(e) => println!("Local Conn Error: {}", e),
+                                    }
+                                });
+
+                                use dashmap::mapref::entry::Entry;
+                                match PROXYS.entry(pkt.id) {
+                                    Entry::Occupied(mut e) => {
+                                        e.get_mut().2.push(task);
+                                    }
+                                    _ => {}
                                 }
-                            });
+                            }
+                            _ => {
+                                // TODO
+                            }
                         }
-                        _ => {
-                            // TODO
-                        }
+                    } else {
+                        // TODO: Client Not Found
                     }
                 }
             } else {
@@ -255,6 +283,23 @@ impl PacketProc<RspClientNotFound> for Handler {
         async {
             // TODO
             println!("Client Not Found");
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<PacketInfoClientClosed> for Handler {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, pkt: Box<PacketInfoClientClosed>) -> Self::Output<'_> {
+        async move {
+            self.conns.remove(&pkt.id);
+            if let Some((_, (_, listen, conns))) = PROXYS.remove(&pkt.id) {
+                listen.abort();
+                for v in conns {
+                    v.abort();
+                }
+            }
             Ok(())
         }
     }

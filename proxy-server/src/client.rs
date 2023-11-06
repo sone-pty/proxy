@@ -1,7 +1,9 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use dashmap::DashMap;
-use protocol::{PacketHbClient, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient};
+use protocol::{
+    PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient,
+};
 use tokio::{
     io::BufReader,
     net::tcp::OwnedReadHalf,
@@ -10,7 +12,7 @@ use tokio::{
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::ClientInfo, CHANNEL, CLIENTS, CONNS};
+use crate::{conn::ClientInfo, CLIENTS, CONNS};
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -80,7 +82,8 @@ impl PacketProc<ReqClientLogin> for Client {
                             if id > 0 {
                                 println!("Client.{} disconnected", id);
                                 handle.close();
-                                CLIENTS.get_agent(id).map(|v| v.close());
+                                // CLIENTS.get_agent(id).map(|v| v.close());
+                                CLIENTS.get_agent(id).map(|v| send_pkt!(v, PacketInfoClientClosed {id}));
                                 clients.remove(id);
                                 sx_clients.remove(&id);
                                 CONNS.remove(&id);
@@ -92,7 +95,8 @@ impl PacketProc<ReqClientLogin> for Client {
                                 Err(_) => {
                                     println!("Client.{} disconnected", id);
                                     handle.close();
-                                    CLIENTS.get_agent(id).map(|v| v.close());
+                                    // CLIENTS.get_agent(id).map(|v| v.close());
+                                    CLIENTS.get_agent(id).map(|v| send_pkt!(v, PacketInfoClientClosed {id}));
                                     clients.remove(id);
                                     sx_clients.remove(&id);
                                     CONNS.remove(&id);
@@ -136,7 +140,7 @@ impl PacketProc<ReqClientLogin> for Client {
                     _ => {}
                 }
                 // reset
-                CHANNEL.0.send_replace(None);
+                // CHANNEL.0.send_replace(None);
             });
             Ok(())
         }
@@ -150,7 +154,10 @@ impl PacketProc<RspNewConnFailedClient> for Client {
         async move {
             println!("Client.{} disconnected", pkt.id);
             self.handle.close();
-            CLIENTS.get_agent(pkt.id).map(|v| v.close());
+            CLIENTS
+                .get_agent(pkt.id)
+                .map(|v| send_pkt!(v, PacketInfoClientClosed { id: pkt.id }));
+            // CLIENTS.get_agent(pkt.id).map(|v| v.close());
             Ok(())
         }
     }

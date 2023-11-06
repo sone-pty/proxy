@@ -31,9 +31,7 @@ packet<100> PacketBoudary;
 // ---------------------------Agent--------------------
 
 // Agent侧心跳
-packet<101> PacketHbAgent {
-    u32 id;
-}
+packet<101> PacketHbAgent {}
 
 // server向Agent申请监听请求
 request<102> ReqAgentBuild {
@@ -60,5 +58,10 @@ request<105> ReqNewConnectionAgent {
 // Agent->server
 request<106> ReqAgentLogin {}
 response<107> RspAgentLoginOk {}
+
+// server->Agent, 通知Client关闭
+request<108> PacketInfoClientClosed {
+    u32 id;
+}
 
 // ---------------------------Agent--------------------

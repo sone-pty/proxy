@@ -1,4 +1,4 @@
-use std::{future::Future, time::Duration};
+use std::future::Future;
 
 use protocol::{
     PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
@@ -15,12 +15,11 @@ use crate::{
 
 pub struct Agent {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx: Option<tokio::sync::watch::Sender<u32>>,
 }
 
 impl Agent {
     pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
-        Self { handle, sx: None }
+        Self { handle }
     }
 }
 
@@ -38,16 +37,11 @@ impl PacketProc<PacketHbAgent> for Agent {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
-        let cid = pkt.id;
-        self.sx.as_ref().map(|v| v.send_replace(cid));
         async move {
             match send_pkt!(self.handle, pkt) {
                 Ok(_) => {}
                 Err(_) => {
                     self.handle.close();
-                    if cid > 0 {
-                        CLIENTS.get_client(cid).map(|v| v.close());
-                    }
                 }
             }
             Ok(())
@@ -62,38 +56,6 @@ impl PacketProc<ReqAgentLogin> for Agent {
         async {
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
             CHANNEL.0.send_replace(Some(self.handle.clone()));
-
-            let (sx, mut rx) = tokio::sync::watch::channel(0);
-            let handle = self.handle.clone();
-            self.sx = Some(sx);
-            tokio::spawn(async move {
-                loop {
-                    tokio::select! {
-                        r = rx.changed() => {
-                            match r {
-                                Ok(_) => {
-                                    rx.borrow_and_update();
-                                }
-                                Err(_) => {
-                                    handle.close();
-                                    let cid = rx.borrow();
-                                    if *cid > 0 {
-                                        CLIENTS.get_client(*cid).map(|v| v.close());
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                            handle.close();
-                            let cid = rx.borrow();
-                            if *cid > 0 {
-                                CLIENTS.get_client(*cid).map(|v| v.close());
-                            }
-                        }
-                    }
-                }
-            });
             Ok(())
         }
     }
