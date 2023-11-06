@@ -7,7 +7,7 @@ use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 use clap::Parser;
 use protocol::{
     compose, Consts, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
-    RspNewConnFailedClient,
+    RspNewConnFailedClient, RspServiceNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -124,6 +124,7 @@ impl RegistryInit for Client {
         register.insert::<PacketHbClient>();
         register.insert::<RspClientLoginFailed>();
         register.insert::<ReqNewConnectionClient>();
+        register.insert::<RspServiceNotFound>();
     }
 }
 
@@ -185,6 +186,18 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                 let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
             }
             Ok(())
+        }
+    }
+}
+
+impl PacketProc<RspServiceNotFound> for Client {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, _: Box<RspServiceNotFound>) -> Self::Output<'_> {
+        async {
+            println!("Service Is Not Found");
+            self.handle.close();
+            exit(-1);
         }
     }
 }

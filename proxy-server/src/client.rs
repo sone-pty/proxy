@@ -3,6 +3,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use dashmap::DashMap;
 use protocol::{
     PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient,
+    RspServiceNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -64,7 +65,7 @@ impl PacketProc<ReqClientLogin> for Client {
         async move {
             let port_wrap = SERVICES.get(pkt.service.as_str());
             if port_wrap.is_none() {
-                // TODO: No such service
+                let _ = send_pkt!(self.handle, RspServiceNotFound {});
                 return Ok(());
             }
             let port = *port_wrap.unwrap();

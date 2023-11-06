@@ -28,6 +28,9 @@ response<5> RspNewConnFailedClient {
     u32 id;
 }
 
+// server->client: 没有找到相应的服务
+response<6> RspServiceNotFound {}
+
 // ---------------------------client--------------------
 
 packet<100> PacketBoudary;

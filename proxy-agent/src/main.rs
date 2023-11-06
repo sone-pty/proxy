@@ -176,6 +176,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
                     Ok(listener) => {
+                        println!("Proxy.{} Begin", pkt.id);
                         loop {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
