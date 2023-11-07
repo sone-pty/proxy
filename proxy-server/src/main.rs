@@ -3,14 +3,7 @@
 #![feature(async_closure)]
 #![feature(sync_unsafe_cell)]
 
-use std::{
-    collections::HashMap,
-    path::{Path, PathBuf},
-    process::exit,
-    str::FromStr,
-    sync::LazyLock,
-    time::Duration,
-};
+use std::{sync::LazyLock, time::Duration};
 
 use agent::Agent;
 use clap::Parser;
@@ -18,13 +11,9 @@ use client::Client;
 use conn::{ClientConns, Conns};
 use dashmap::DashMap;
 use protocol::{get_id, is_client, BOUDARY};
-use serde::Deserialize;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{
-        mpsc,
-        watch::{channel, Receiver, Sender},
-    },
+    sync::mpsc,
 };
 use vnpkt::tokio_ext::{io::AsyncReadExt, registry::Registry};
 use vnsvrbase::{process::hook_terminate_signal, tokio_ext::tcp_link::TcpLink};
@@ -35,44 +24,19 @@ mod conn;
 
 static REGISTRY_CLIENT: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 static REGISTRY_AGENT: LazyLock<Registry<Agent>> = LazyLock::new(Registry::new);
-static CLIENTS: LazyLock<ClientConns> = LazyLock::new(|| ClientConns::new());
-static CONNS: LazyLock<DashMap<u32, Conns>> = LazyLock::new(|| DashMap::new());
-static CHANNEL: LazyLock<(
-    Sender<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
-    Receiver<Option<vnsvrbase::tokio_ext::tcp_link::Handle>>,
-)> = LazyLock::new(|| channel(None));
-static SERVICES: LazyLock<DashMap<String, u16>> = LazyLock::new(|| DashMap::new());
-
-#[derive(Deserialize)]
-struct Services {
-    data: HashMap<String, u16>,
-}
+static CLIENTS: LazyLock<DashMap<u32, ClientConns>> = LazyLock::new(|| DashMap::new());
+static AGENTS: LazyLock<DashMap<u32, vnsvrbase::tokio_ext::tcp_link::Handle>> =
+    LazyLock::new(|| DashMap::new());
+static CONNS: LazyLock<DashMap<(u32, u32), Conns>> = LazyLock::new(|| DashMap::new());
 
 #[derive(Parser)]
 struct Args {
     main_port: u16,
     conn_port: u16,
-    services: String,
 }
 
 fn main() {
     let args = Args::parse();
-
-    let services_path = PathBuf::from_str(&args.services);
-    if services_path.is_err() {
-        println!("Services Not Found");
-        exit(-1);
-    }
-    let services = load(services_path.unwrap());
-    if services.is_err() {
-        println!("Load Services Failed");
-        exit(-1);
-    }
-
-    for v in services.unwrap().data.into_iter() {
-        SERVICES.insert(v.0, v.1);
-    }
-
     let (quit_tx, mut quit_rx) = tokio::sync::watch::channel(false);
     hook_terminate_signal(Some(move || {
         let _ = quit_tx.send(true);
@@ -97,15 +61,6 @@ fn main() {
         quit_rx.changed().await
     })
     .unwrap();
-}
-
-fn load<P: AsRef<Path>>(services: P) -> std::io::Result<Services> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(services)?;
-    let mut content = String::with_capacity(1024);
-    file.read_to_string(&mut content)?;
-    let services = serde_json::from_str(&content)?;
-    Ok(services)
 }
 
 async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<()> {
@@ -142,38 +97,39 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             _ = tokio::time::sleep(Duration::from_secs(5)) => {}
                             _ = async move {
                                 use tokio::io::AsyncReadExt;
-                                if let Ok(cid) = stream.read_u32().await {
-                                    match CONNS.get(&cid) {
-                                        Some(conns) => {
-                                            if let Ok(data) = stream.read_compressed_u64().await {
-                                                let id = get_id(&data);
 
-                                                if is_client(&data) {
-                                                    tokio::spawn(async move {
-                                                        match conns.get_rx(id) {
-                                                            Some(rx) => {
-                                                                match rx.await {
-                                                                    Ok(mut peer) => {
-                                                                        conns.remove(id);
-                                                                        println!("Conn.{} Begin", id);
-                                                                        match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                                            Ok(_) => println!("Conn.{} Disconnected", id),
-                                                                            Err(e) => println!("Conn.{} Error: {}", id, e)
-                                                                        }
-                                                                    },
-                                                                    _ => {}
-                                                                }
-                                                            },
-                                                            _ => {}
-                                                        }
-                                                    });
-                                                } else {
-                                                    match conns.get_sx(id) {
-                                                        Some(sx) => {
-                                                            let _ = sx.send(stream);
+                                if let (Ok(agent_id), Ok(cid), Ok(data)) = async {
+                                    (stream.read_u32().await, stream.read_u32().await, stream.read_compressed_u64().await)
+                                }.await {
+                                    match CONNS.get(&(agent_id, cid)) {
+                                        Some(conns) => {
+                                            let id = get_id(&data);
+
+                                            if is_client(&data) {
+                                                tokio::spawn(async move {
+                                                    match conns.get_rx(id) {
+                                                        Some(rx) => {
+                                                            match rx.await {
+                                                                Ok(mut peer) => {
+                                                                    conns.remove(id);
+                                                                    println!("With Proxy.{}, Conn.{} Begin", agent_id, id);
+                                                                    match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                                        Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, id),
+                                                                        Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, id, e)
+                                                                    }
+                                                                },
+                                                                _ => {}
+                                                            }
                                                         },
                                                         _ => {}
                                                     }
+                                                });
+                                            } else {
+                                                match conns.get_sx(id) {
+                                                    Some(sx) => {
+                                                        let _ = sx.send(stream);
+                                                    },
+                                                    _ => {}
                                                 }
                                             }
                                         },
@@ -194,7 +150,7 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
     let mut pid = link.read.read_compressed_u64().await?;
     if pid <= u32::MAX as _ {
         if (pid as u32) < BOUDARY {
-            let mut client = Client::new(link.handle().clone(), CHANNEL.1.clone());
+            let mut client = Client::new(link.handle().clone());
             let register_client = &*REGISTRY_CLIENT;
 
             loop {
@@ -228,8 +184,14 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
     Err(std::io::ErrorKind::InvalidData.into())
 }
 
-pub fn reset() {
-    CLIENTS.clear();
-    CONNS.clear();
-    let _ = CHANNEL.0.send_replace(None);
+pub fn reset(id: u32) {
+    CLIENTS.get(&id).map(|v| v.clear());
+    let mut keys = Vec::new();
+    let _ = CONNS
+        .iter()
+        .filter(|v| v.key().0 == id)
+        .map(|v| keys.push(*v.key()));
+    for key in keys {
+        CONNS.remove(&key);
+    }
 }

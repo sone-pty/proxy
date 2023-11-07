@@ -6,7 +6,7 @@ use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
 
 use clap::Parser;
 use protocol::{
-    compose, Consts, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
+    compose, PacketHbClient, ReqClientLogin, ReqNewConnectionClient, RspClientLoginFailed,
     RspNewConnFailedClient, RspServiceNotFound,
 };
 use tokio::{
@@ -27,7 +27,8 @@ static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 #[derive(Parser)]
 pub struct Args {
     local: String,
-    service: String,
+    agentid: u32,
+    port: u16,
     server: String,
     server_main_port: u16,
     server_conn_port: u16,
@@ -35,12 +36,6 @@ pub struct Args {
 
 fn main() {
     let args = Args::parse();
-
-    if args.service.len() > Consts::MaxServiceLen as _ {
-        println!("Error: Service Len > {}", Consts::MaxServiceLen as u32);
-        exit(-1);
-    }
-
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_time()
         .enable_io()
@@ -65,7 +60,8 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
         let _ = send_pkt!(
             link.handle(),
             ReqClientLogin {
-                service: unsafe { vnpkt::string::String::from_unchecked(args.service.clone()) }
+                id: args.agentid,
+                port: args.port
             }
         );
         receiving(link, args).await
@@ -155,6 +151,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
+        let agent_id = self.args.agentid;
         async move {
             if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) =
@@ -163,6 +160,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                 {
                     if async {
                         use tokio::io::AsyncWriteExt;
+                        remote.write_u32(pkt.agent_id).await?;
                         remote.write_u32(pkt.id).await?;
                         remote.write_compressed_u64(compose(pkt.sid, true)).await?;
                         std::io::Result::Ok(())
@@ -175,15 +173,33 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                         });
                     } else {
                         println!("Send Pkt Id to Server Failed");
-                        let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
+                        let _ = send_pkt!(
+                            self.handle,
+                            RspNewConnFailedClient {
+                                agent_id,
+                                id: pkt.id
+                            }
+                        );
                     }
                 } else {
                     println!("Connect Remote Server Failed");
-                    let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
+                    let _ = send_pkt!(
+                        self.handle,
+                        RspNewConnFailedClient {
+                            agent_id,
+                            id: pkt.id
+                        }
+                    );
                 }
             } else {
                 println!("Connect Target Failed");
-                let _ = send_pkt!(self.handle, RspNewConnFailedClient { id: pkt.id });
+                let _ = send_pkt!(
+                    self.handle,
+                    RspNewConnFailedClient {
+                        agent_id,
+                        id: pkt.id
+                    }
+                );
             }
             Ok(())
         }

@@ -39,6 +39,7 @@ type Conns = DashMap<u32, DashMap<u32, TcpStream>>;
 #[derive(Parser)]
 struct Args {
     server: String,
+    id: u32,
     server_main_port: u16,
     server_conn_port: u16,
 }
@@ -67,7 +68,7 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
     println!("Connect Server Success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
-        let _ = send_pkt!(link.handle(), ReqAgentLogin {});
+        let _ = send_pkt!(link.handle(), ReqAgentLogin { id: args.id });
         receiving(link, args).await
     });
     Ok(())
@@ -145,9 +146,10 @@ impl PacketProc<RspAgentLoginOk> for Handler {
     fn proc(&mut self, _: Box<RspAgentLoginOk>) -> Self::Output<'_> {
         async {
             let handle = self.handle.clone();
+            let id = self.args.id;
             tokio::spawn(async move {
                 loop {
-                    match send_pkt!(handle, PacketHbAgent {}) {
+                    match send_pkt!(handle, PacketHbAgent { id }) {
                         Ok(_) => {}
                         Err(_) => {
                             // TODO
@@ -172,6 +174,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let seed = self.seed.clone();
             let port = pkt.port;
             let cid = pkt.id;
+            let agent_id = self.args.id;
 
             let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
@@ -199,6 +202,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                 let _ = send_pkt!(
                                     handle,
                                     RspAgentBuild {
+                                        agent_id,
                                         id: pkt.id,
                                         sid,
                                         ok: true
@@ -211,6 +215,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                         let _ = send_pkt!(
                             handle,
                             RspAgentBuild {
+                                agent_id,
                                 id: pkt.id,
                                 sid: 0,
                                 ok: false
@@ -236,6 +241,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
             {
                 if async {
                     use tokio::io::AsyncWriteExt;
+                    remote.write_u32(self.args.id).await?;
                     remote.write_u32(pkt.id).await?;
                     remote.write_compressed_u64(compose(pkt.sid, false)).await?;
                     std::io::Result::Ok(())

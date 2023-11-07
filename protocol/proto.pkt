@@ -11,7 +11,8 @@ packet<1> PacketHbClient {
 
 // client向服务器请求代理监听
 request<2> ReqClientLogin {
-    string<16> service;
+    u32 id;
+    u16 port;
 }
 
 // Agent监听失败时: server->client
@@ -19,16 +20,18 @@ response<3> RspClientLoginFailed {}
 
 // server->client: 构建数据链路
 request<4> ReqNewConnectionClient {
+    u32 agent_id;
     u32 id;
     u32 sid;
 }
 
 // client->server: 本地Target连接失败，构建路径失败
 response<5> RspNewConnFailedClient {
+    u32 agent_id;
     u32 id;
 }
 
-// server->client: 没有找到相应的服务
+// server->client: 没有找到相应的Agent
 response<6> RspServiceNotFound {}
 
 // ---------------------------client--------------------
@@ -38,7 +41,9 @@ packet<100> PacketBoudary;
 // ---------------------------Agent--------------------
 
 // Agent侧心跳
-packet<101> PacketHbAgent {}
+packet<101> PacketHbAgent {
+    u32 id;
+}
 
 // server向Agent申请监听请求
 request<102> ReqAgentBuild {
@@ -48,6 +53,7 @@ request<102> ReqAgentBuild {
 
 // Agent->server: 监听请求的响应
 response<103> RspAgentBuild {
+    u32 agent_id;
     u32 id;
     u32 sid;
     bool ok;
@@ -63,7 +69,9 @@ request<105> ReqNewConnectionAgent {
 }
 
 // Agent->server
-request<106> ReqAgentLogin {}
+request<106> ReqAgentLogin {
+    u32 id;
+}
 response<107> RspAgentLoginOk {}
 
 // server->Agent, 通知Client关闭

@@ -10,7 +10,7 @@ use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
 use crate::{
     conn::{ConnInfo, Conns},
-    reset, CHANNEL, CLIENTS, CONNS,
+    reset, AGENTS, CLIENTS, CONNS,
 };
 
 pub struct Agent {
@@ -39,12 +39,13 @@ impl PacketProc<PacketHbAgent> for Agent {
 
     fn proc(&mut self, pkt: Box<PacketHbAgent>) -> Self::Output<'_> {
         self.sx.as_ref().map(|v| v.send_replace(()));
+        let id = pkt.id;
         async move {
             match send_pkt!(self.handle, pkt) {
                 Ok(_) => {}
                 Err(_) => {
                     self.handle.close();
-                    reset();
+                    reset(id);
                 }
             }
             Ok(())
@@ -55,10 +56,16 @@ impl PacketProc<PacketHbAgent> for Agent {
 impl PacketProc<ReqAgentLogin> for Agent {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<ReqAgentLogin>) -> Self::Output<'_> {
-        async {
+    fn proc(&mut self, pkt: Box<ReqAgentLogin>) -> Self::Output<'_> {
+        async move {
+            use dashmap::mapref::entry::Entry;
+            match AGENTS.entry(pkt.id) {
+                Entry::Vacant(e) => {
+                    e.insert(self.handle.clone());
+                }
+                _ => {}
+            }
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
-            CHANNEL.0.send_replace(Some(self.handle.clone()));
 
             // Check Agent
             let (sx, mut rx) = tokio::sync::watch::channel(());
@@ -74,14 +81,14 @@ impl PacketProc<ReqAgentLogin> for Agent {
                                 }
                                 Err(_) => {
                                     handle.close();
-                                    reset();
+                                    reset(pkt.id);
                                     break;
                                 }
                             }
                         }
                         _ = tokio::time::sleep(Duration::from_secs(15)) => {
                             handle.close();
-                            reset();
+                            reset(pkt.id);
                             break;
                         }
                     }
@@ -97,39 +104,45 @@ impl PacketProc<RspAgentBuild> for Agent {
 
     fn proc(&mut self, pkt: Box<RspAgentBuild>) -> Self::Output<'_> {
         async move {
-            let client = CLIENTS.get_client(pkt.id);
-            if pkt.ok && client.is_some() {
-                use dashmap::mapref::entry::Entry;
-                match CONNS.entry(pkt.id) {
-                    Entry::Occupied(e) => {
-                        e.get().insert(ConnInfo::new(pkt.sid));
-                    }
-                    Entry::Vacant(e) => {
-                        let conns = Conns::new(pkt.id);
-                        conns.insert(ConnInfo::new(pkt.sid));
-                        e.insert(conns);
+            match CLIENTS.get(&pkt.agent_id) {
+                Some(clientconns) => {
+                    let client = clientconns.get_client(pkt.id);
+                    if pkt.ok && client.is_some() {
+                        use dashmap::mapref::entry::Entry;
+                        match CONNS.entry((pkt.sid, pkt.id)) {
+                            Entry::Occupied(e) => {
+                                e.get().insert(ConnInfo::new(pkt.sid));
+                            }
+                            Entry::Vacant(e) => {
+                                let conns = Conns::new(pkt.id);
+                                conns.insert(ConnInfo::new(pkt.sid));
+                                e.insert(conns);
+                            }
+                        }
+
+                        let _ = send_pkt!(
+                            client.unwrap(),
+                            ReqNewConnectionClient {
+                                agent_id: pkt.agent_id,
+                                id: pkt.id,
+                                sid: pkt.sid
+                            }
+                        );
+                        let _ = send_pkt!(
+                            self.handle,
+                            ReqNewConnectionAgent {
+                                id: pkt.id,
+                                sid: pkt.sid
+                            }
+                        );
+                    } else if !pkt.ok && client.is_some() {
+                        let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
+                        clientconns.remove(pkt.id);
+                    } else {
+                        let _ = send_pkt!(self.handle, RspClientNotFound {});
                     }
                 }
-
-                let _ = send_pkt!(
-                    client.unwrap(),
-                    ReqNewConnectionClient {
-                        id: pkt.id,
-                        sid: pkt.sid
-                    }
-                );
-                let _ = send_pkt!(
-                    self.handle,
-                    ReqNewConnectionAgent {
-                        id: pkt.id,
-                        sid: pkt.sid
-                    }
-                );
-            } else if !pkt.ok && client.is_some() {
-                let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
-                CLIENTS.remove(pkt.id);
-            } else {
-                let _ = send_pkt!(self.handle, RspClientNotFound {});
+                None => {}
             }
             Ok(())
         }
