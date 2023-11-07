@@ -2,7 +2,7 @@ use std::{future::Future, time::Duration};
 
 use protocol::{
     PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
-    RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
+    RspAgentLoginFailed, RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
 };
 use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
@@ -63,7 +63,10 @@ impl PacketProc<ReqAgentLogin> for Agent {
                 Entry::Vacant(e) => {
                     e.insert(self.handle.clone());
                 }
-                _ => {}
+                _ => {
+                    let _ = send_pkt!(self.handle, RspAgentLoginFailed {});
+                    return Ok(());
+                }
             }
             let _ = send_pkt!(self.handle, RspAgentLoginOk {});
 

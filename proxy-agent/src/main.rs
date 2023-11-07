@@ -14,7 +14,7 @@ use clap::Parser;
 use dashmap::DashMap;
 use protocol::{
     compose, PacketHbAgent, PacketInfoClientClosed, ReqAgentBuild, ReqAgentLogin,
-    ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginOk, RspClientNotFound,
+    ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk, RspClientNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -125,6 +125,7 @@ impl RegistryInit for Handler {
     fn init(register: &mut Registry<Self>) {
         register.insert::<PacketHbAgent>();
         register.insert::<RspAgentLoginOk>();
+        register.insert::<RspAgentLoginFailed>();
         register.insert::<ReqAgentBuild>();
         register.insert::<RspClientNotFound>();
         register.insert::<ReqNewConnectionAgent>();
@@ -160,6 +161,18 @@ impl PacketProc<RspAgentLoginOk> for Handler {
                 }
             });
             Ok(())
+        }
+    }
+}
+
+impl PacketProc<RspAgentLoginFailed> for Handler {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, _: Box<RspAgentLoginFailed>) -> Self::Output<'_> {
+        async {
+            println!("Login Server Failed");
+            self.handle.close();
+            exit(-1);
         }
     }
 }

@@ -79,4 +79,5 @@ request<108> PacketInfoClientClosed {
     u32 id;
 }
 
+response<109> RspAgentLoginFailed {}
 // ---------------------------Agent--------------------
