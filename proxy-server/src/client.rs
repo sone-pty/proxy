@@ -1,6 +1,5 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, time::Duration};
 
-use dashmap::DashMap;
 use protocol::{
     PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient,
     RspServiceNotFound,
@@ -20,14 +19,14 @@ use crate::{
 
 pub struct Client {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx_clients: Arc<DashMap<u32, Sender<bool>>>,
+    sx_client: Option<Sender<bool>>,
 }
 
 impl Client {
     pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
         Self {
             handle,
-            sx_clients: Arc::new(DashMap::new()),
+            sx_client: None,
         }
     }
 }
@@ -45,9 +44,9 @@ impl RegistryInit for Client {
 impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
+    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
         async move {
-            self.sx_clients.get(&pkt.id).map(|sx| {
+            self.sx_client.as_ref().map(|sx| {
                 let now = *sx.borrow();
                 sx.send_replace(!now);
             });
@@ -97,10 +96,8 @@ impl PacketProc<ReqClientLogin> for Client {
 
             let handle = self.handle.clone();
             let agent_clone = agent.clone();
-            let clients = CLIENTS.get(&agent_id).unwrap();
-            let sx_clients = self.sx_clients.clone();
             let (tsx, trx) = channel(false);
-            self.sx_clients.insert(id, tsx);
+            self.sx_client = Some(tsx);
 
             tokio::spawn(async move {
                 'hb: loop {
@@ -112,8 +109,7 @@ impl PacketProc<ReqClientLogin> for Client {
                                 println!("With Proxy.{}, Client.{} Disconnected", agent_id, id);
                                 handle.close();
                                 let _ = send_pkt!(agent_clone, PacketInfoClientClosed {id});
-                                clients.remove(id);
-                                sx_clients.remove(&id);
+                                CLIENTS.get(&agent_id).map(|v| v.remove(id));
                                 CONNS.remove(&(agent_id, id));
                                 break 'hb;
                             }
@@ -124,8 +120,7 @@ impl PacketProc<ReqClientLogin> for Client {
                                     println!("With Proxy.{}, Client.{} Disconnected", agent_id, id);
                                     handle.close();
                                     let _ = send_pkt!(agent_clone, PacketInfoClientClosed {id});
-                                    clients.remove(id);
-                                    sx_clients.remove(&id);
+                                    CLIENTS.get(&agent_id).map(|v| v.remove(id));
                                     CONNS.remove(&(agent_id, id));
                                     return false;
                                 }

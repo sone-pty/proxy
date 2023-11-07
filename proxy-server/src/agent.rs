@@ -142,7 +142,9 @@ impl PacketProc<RspAgentBuild> for Agent {
                         let _ = send_pkt!(self.handle, RspClientNotFound {});
                     }
                 }
-                None => {}
+                None => {
+                    unreachable!()
+                }
             }
             Ok(())
         }
