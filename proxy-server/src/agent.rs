@@ -109,7 +109,7 @@ impl PacketProc<RspAgentBuild> for Agent {
                     let client = clientconns.get_client(pkt.id);
                     if pkt.ok && client.is_some() {
                         use dashmap::mapref::entry::Entry;
-                        match CONNS.entry((pkt.sid, pkt.id)) {
+                        match CONNS.entry((pkt.agent_id, pkt.id)) {
                             Entry::Occupied(e) => {
                                 e.get().insert(ConnInfo::new(pkt.sid));
                             }
