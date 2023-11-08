@@ -106,23 +106,23 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                             let id = get_id(&data);
 
                                             if is_client(&data) {
-                                                match conns.get_rx(id) {
-                                                    Some(rx) => {
-                                                        match rx.await {
-                                                            Ok(mut peer) => {
-                                                                conns.remove(id);
-                                                                println!("With Proxy.{}, Conn.{} Begin", agent_id, id);
-                                                                tokio::spawn(async move {
-                                                                    match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                                        Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, id),
-                                                                        Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, id, e)
-                                                                    }
+                                                let rx_wrap = conns.get_rx(id);
+                                                if rx_wrap.is_some() {
+                                                    match rx_wrap.unwrap().await {
+                                                        Ok(mut peer) => {
+                                                            println!("With Proxy.{}, Conn.{} Begin", agent_id, id);
+                                                            tokio::spawn(async move {
+                                                                CONNS.get(&(agent_id, cid)).map(|v| {
+                                                                    v.remove(id);
                                                                 });
-                                                            },
-                                                            _ => {}
-                                                        }
-                                                    },
-                                                    _ => {}
+                                                                match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                                    Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, id),
+                                                                    Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, id, e)
+                                                                }
+                                                            });
+                                                        },
+                                                        _ => {}
+                                                    }
                                                 }
                                             } else {
                                                 match conns.get_sx(id) {
