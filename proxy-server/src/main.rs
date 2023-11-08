@@ -104,21 +104,23 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                         if is_client(&data) {
                             let rx_wrap = CONNS.get(&(agent_id, cid)).unwrap().get_rx(sid);
                             if rx_wrap.is_some() {
-                                match rx_wrap.unwrap().await {
-                                    Ok(mut peer) => {
-                                        println!("With Proxy.{}, Conn.{} Begin", agent_id, sid);
-                                        tokio::spawn(async move {
-                                            CONNS.get(&(agent_id, cid)).map(|v| {
-                                                v.remove(sid);
+                                tokio::spawn(async move {
+                                    match rx_wrap.unwrap().await {
+                                        Ok(mut peer) => {
+                                            println!("With Proxy.{}, Conn.{} Begin", agent_id, sid);
+                                            tokio::spawn(async move {
+                                                CONNS.get(&(agent_id, cid)).map(|v| {
+                                                    v.remove(sid);
+                                                });
+                                                match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                    Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, sid),
+                                                    Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, sid, e)
+                                                }
                                             });
-                                            match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, sid),
-                                                Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, sid, e)
-                                            }
-                                        });
-                                    },
-                                    _ => {}
-                                }
+                                        },
+                                        _ => {}
+                                    }
+                                });
                             }
                         } else {
                             match CONNS.get(&(agent_id, cid)).unwrap().get_sx(sid) {

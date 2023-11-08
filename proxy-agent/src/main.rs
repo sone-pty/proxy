@@ -273,6 +273,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                         match conns.remove(&pkt.sid) {
                             Some((_, mut local)) => {
                                 let task = tokio::spawn(async move {
+                                    println!("BEGIN");
                                     match tokio::io::copy_bidirectional(&mut local, &mut remote)
                                         .await
                                     {
