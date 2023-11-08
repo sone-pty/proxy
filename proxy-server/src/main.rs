@@ -92,53 +92,41 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                     let _ = stream.set_nodelay(true);
                     let _ = stream.set_linger(None);
 
-                    handle.spawn(async move {
-                        tokio::select! {
-                            _ = tokio::time::sleep(Duration::from_secs(5)) => {}
-                            _ = async move {
-                                use tokio::io::AsyncReadExt;
-
-                                if let (Ok(agent_id), Ok(cid), Ok(data)) = async {
-                                    (stream.read_u32().await, stream.read_u32().await, stream.read_compressed_u64().await)
-                                }.await {
-                                    match CONNS.get(&(agent_id, cid)) {
-                                        Some(conns) => {
-                                            let id = get_id(&data);
-
-                                            if is_client(&data) {
-                                                let rx_wrap = conns.get_rx(id);
-                                                if rx_wrap.is_some() {
-                                                    match rx_wrap.unwrap().await {
-                                                        Ok(mut peer) => {
-                                                            println!("With Proxy.{}, Conn.{} Begin", agent_id, id);
-                                                            tokio::spawn(async move {
-                                                                CONNS.get(&(agent_id, cid)).map(|v| {
-                                                                    v.remove(id);
-                                                                });
-                                                                match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                                    Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, id),
-                                                                    Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, id, e)
-                                                                }
-                                                            });
-                                                        },
-                                                        _ => {}
-                                                    }
+                    use tokio::io::AsyncReadExt;
+                    if let (Ok(agent_id), Ok(cid), Ok(data)) = async {
+                        (stream.read_u32().await, stream.read_u32().await, stream.read_compressed_u64().await)
+                    }.await {
+                        if let Some(conns) = CONNS.get(&(agent_id, cid)) {
+                            let sid = get_id(&data);
+                            if is_client(&data) {
+                                let rx_wrap = conns.get_rx(sid);
+                                if rx_wrap.is_some() {
+                                    match rx_wrap.unwrap().await {
+                                        Ok(mut peer) => {
+                                            println!("With Proxy.{}, Conn.{} Begin", agent_id, sid);
+                                            tokio::spawn(async move {
+                                                CONNS.get(&(agent_id, cid)).map(|v| {
+                                                    v.remove(sid);
+                                                });
+                                                match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                    Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, sid),
+                                                    Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, sid, e)
                                                 }
-                                            } else {
-                                                match conns.get_sx(id) {
-                                                    Some(sx) => {
-                                                        let _ = sx.send(stream);
-                                                    },
-                                                    _ => {}
-                                                }
-                                            }
+                                            });
                                         },
                                         _ => {}
                                     }
                                 }
-                            } => {}
+                            } else {
+                                match conns.get_sx(sid) {
+                                    Some(sx) => {
+                                        let _ = sx.send(stream);
+                                    },
+                                    _ => {}
+                                }
+                            }
                         }
-                    });
+                    }
                 }
             }
         } => {}
