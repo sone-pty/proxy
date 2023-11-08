@@ -161,12 +161,10 @@ impl PacketProc<RspNewConnFailedClient> for Client {
 
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
-            println!(
-                "With Proxy.{}, Client.{} Disconnected",
-                pkt.agent_id, pkt.id
-            );
             self.handle.close();
-            AGENTS.get(&pkt.agent_id).map(|v| v.close());
+            AGENTS.get(&pkt.agent_id).map(|v| {
+                let _ = send_pkt!(v, PacketInfoClientClosed { id: pkt.id });
+            });
             Ok(())
         }
     }

@@ -31,7 +31,7 @@ use vnsvrbase::{
 };
 
 static REGISTRY: LazyLock<Registry<Handler>> = LazyLock::new(Registry::new);
-static PROXYS: LazyLock<DashMap<u32, (u16, JoinHandle<()>, Vec<JoinHandle<()>>)>> =
+static PROXYS: LazyLock<DashMap<u32, (u16, JoinHandle<()>, Vec<(u32, JoinHandle<()>)>)>> =
     LazyLock::new(DashMap::new);
 
 type Conns = DashMap<u32, DashMap<u32, TcpStream>>;
@@ -192,7 +192,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
                     Ok(listener) => {
-                        println!("Proxy.{} Begin", pkt.id);
+                        println!("({}).Proxy[{}] Begin", agent_id, pkt.port);
                         loop {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
@@ -210,7 +210,10 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                         e.get().insert(sid, stream);
                                     }
                                 }
-                                println!("In Proxy.{}, Local Conn.{} Build", pkt.id, sid);
+                                println!(
+                                    "({}).Proxy[{}], Local Conn.{} Build",
+                                    agent_id, pkt.port, sid
+                                );
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
@@ -248,6 +251,8 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<ReqNewConnectionAgent>) -> Self::Output<'_> {
+        let agent_id = self.args.id;
+        let sid = pkt.sid;
         async move {
             if let Ok(mut remote) =
                 TcpStream::connect((self.args.server.as_str(), self.args.server_conn_port)).await
@@ -269,15 +274,23 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                     match tokio::io::copy_bidirectional(&mut local, &mut remote)
                                         .await
                                     {
-                                        Ok(_) => println!("Local Conn Disconnected"),
-                                        Err(e) => println!("Local Conn Error: {}", e),
+                                        Ok(_) => {
+                                            println!(
+                                                "In ({}).Proxy, Local Conn.{} Disconnected",
+                                                agent_id, sid
+                                            )
+                                        }
+                                        Err(e) => println!(
+                                            "In ({}).Proxy, Local Conn.{} Error: {}",
+                                            agent_id, sid, e
+                                        ),
                                     }
                                 });
 
                                 use dashmap::mapref::entry::Entry;
                                 match PROXYS.entry(pkt.id) {
                                     Entry::Occupied(mut e) => {
-                                        e.get_mut().2.push(task);
+                                        e.get_mut().2.push((pkt.sid, task));
                                     }
                                     _ => {}
                                 }
@@ -315,13 +328,18 @@ impl PacketProc<PacketInfoClientClosed> for Handler {
 
     fn proc(&mut self, pkt: Box<PacketInfoClientClosed>) -> Self::Output<'_> {
         async move {
-            println!("Proxy.{} Shutdown", pkt.id);
-            self.conns.remove(&pkt.id);
-            if let Some((_, (_, listen, conns))) = PROXYS.remove(&pkt.id) {
+            use tokio::io::AsyncWriteExt;
+            self.conns.remove(&pkt.id).map(async move |v| {
+                for mut v in v.1 {
+                    let _ = v.1.shutdown().await;
+                }
+            });
+            if let Some((_, (port, listen, conns))) = PROXYS.remove(&pkt.id) {
                 listen.abort();
-                for v in conns {
+                for (_, v) in conns {
                     v.abort();
                 }
+                println!("({}).Proxy[{}] Shutdown", self.args.id, port);
             }
             Ok(())
         }

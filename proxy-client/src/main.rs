@@ -177,7 +177,8 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                             self.handle,
                             RspNewConnFailedClient {
                                 agent_id,
-                                id: pkt.id
+                                id: pkt.id,
+                                sid: pkt.sid,
                             }
                         );
                     }
@@ -187,7 +188,8 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                         self.handle,
                         RspNewConnFailedClient {
                             agent_id,
-                            id: pkt.id
+                            id: pkt.id,
+                            sid: pkt.sid
                         }
                     );
                 }
@@ -197,7 +199,8 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     self.handle,
                     RspNewConnFailedClient {
                         agent_id,
-                        id: pkt.id
+                        id: pkt.id,
+                        sid: pkt.sid
                     }
                 );
             }

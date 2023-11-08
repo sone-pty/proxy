@@ -29,6 +29,7 @@ request<4> ReqNewConnectionClient {
 response<5> RspNewConnFailedClient {
     u32 agent_id;
     u32 id;
+    u32 sid;
 }
 
 // server->client: 没有找到相应的Agent
@@ -75,7 +76,7 @@ request<106> ReqAgentLogin {
 response<107> RspAgentLoginOk {}
 
 // server->Agent, 通知Client关闭
-request<108> PacketInfoClientClosed {
+packet<108> PacketInfoClientClosed {
     u32 id;
 }
 
