@@ -194,4 +194,5 @@ pub fn reset(id: u32) {
     for key in keys {
         CONNS.remove(&key);
     }
+    AGENTS.remove(&id);
 }

@@ -13,8 +13,9 @@ use std::{
 use clap::Parser;
 use dashmap::DashMap;
 use protocol::{
-    compose, PacketHbAgent, PacketInfoClientClosed, ReqAgentBuild, ReqAgentLogin,
-    ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk, RspClientNotFound,
+    compose, PacketHbAgent, PacketInfoClientClosed, PacketInfoConnectFailed, ReqAgentBuild,
+    ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk,
+    RspClientNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -252,6 +253,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
 
     fn proc(&mut self, pkt: Box<ReqNewConnectionAgent>) -> Self::Output<'_> {
         let agent_id = self.args.id;
+        let cid = pkt.id;
         let sid = pkt.sid;
         async move {
             if let Ok(mut remote) =
@@ -295,16 +297,22 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                     _ => {}
                                 }
                             }
-                            _ => {
-                                // TODO
-                            }
+                            _ => {}
                         }
-                    } else {
-                        // TODO: Client Not Found
                     }
                 }
             } else {
-                // TODO
+                use tokio::io::AsyncWriteExt;
+                if let Some(conns) = self.conns.get(&cid) {
+                    match conns.remove(&sid) {
+                        Some((_, mut local)) => {
+                            let _ = local.shutdown().await;
+                        }
+                        _ => {}
+                    }
+                }
+                let _ = send_pkt!(self.handle, PacketInfoConnectFailed { agent_id, cid, sid });
+                println!("Connect Server Conn Port Failed");
             }
             Ok(())
         }
@@ -314,12 +322,8 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
 impl PacketProc<RspClientNotFound> for Handler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<RspClientNotFound>) -> Self::Output<'_> {
-        async {
-            // TODO
-            println!("Client Not Found");
-            Ok(())
-        }
+    fn proc(&mut self, pkt: Box<RspClientNotFound>) -> Self::Output<'_> {
+        async move { self.clear(pkt.id).await }
     }
 }
 
@@ -327,21 +331,25 @@ impl PacketProc<PacketInfoClientClosed> for Handler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<PacketInfoClientClosed>) -> Self::Output<'_> {
-        async move {
-            use tokio::io::AsyncWriteExt;
-            self.conns.remove(&pkt.id).map(async move |v| {
-                for mut v in v.1 {
-                    let _ = v.1.shutdown().await;
-                }
-            });
-            if let Some((_, (port, listen, conns))) = PROXYS.remove(&pkt.id) {
-                listen.abort();
-                for (_, v) in conns {
-                    v.abort();
-                }
-                println!("({}).Proxy[{}] Shutdown", self.args.id, port);
+        async move { self.clear(pkt.id).await }
+    }
+}
+
+impl Handler {
+    async fn clear(&mut self, id: u32) -> std::io::Result<()> {
+        use tokio::io::AsyncWriteExt;
+        self.conns.remove(&id).map(async move |v| {
+            for mut v in v.1 {
+                let _ = v.1.shutdown().await;
             }
-            Ok(())
+        });
+        if let Some((_, (port, listen, conns))) = PROXYS.remove(&id) {
+            listen.abort();
+            for (_, v) in conns {
+                v.abort();
+            }
+            println!("({}).Proxy[{}] Shutdown", self.args.id, port);
         }
+        Ok(())
     }
 }

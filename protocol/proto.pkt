@@ -1,7 +1,3 @@
-enum Consts: uint {
-    MaxServiceLen = 16,
-}
-
 // ---------------------------client--------------------
 
 // client侧心跳
@@ -35,6 +31,11 @@ response<5> RspNewConnFailedClient {
 // server->client: 没有找到相应的Agent
 response<6> RspServiceNotFound {}
 
+response<7> RspClientLoginOk {
+    u32 agent_id;
+    u32 id;
+}
+
 // ---------------------------client--------------------
 
 packet<100> PacketBoudary;
@@ -61,7 +62,9 @@ response<103> RspAgentBuild {
 }
 
 // server->agent: 找不到对应id的client
-response<104> RspClientNotFound {}
+response<104> RspClientNotFound {
+    u32 id;
+}
 
 // server->Agent: 构建数据链路
 request<105> ReqNewConnectionAgent {
@@ -75,10 +78,17 @@ request<106> ReqAgentLogin {
 }
 response<107> RspAgentLoginOk {}
 
-// server->Agent, 通知Client关闭
+// server->Agent, Client断开
 packet<108> PacketInfoClientClosed {
     u32 id;
 }
 
 response<109> RspAgentLoginFailed {}
+
+// 连接server的conn端口失败
+packet<110> PacketInfoConnectFailed {
+    u32 agent_id;
+    u32 cid;
+    u32 sid;
+}
 // ---------------------------Agent--------------------

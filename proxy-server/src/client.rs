@@ -1,8 +1,8 @@
 use std::{future::Future, time::Duration};
 
 use protocol::{
-    PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspNewConnFailedClient,
-    RspServiceNotFound,
+    PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspClientLoginOk,
+    RspNewConnFailedClient, RspServiceNotFound,
 };
 use tokio::{
     io::BufReader,
@@ -150,6 +150,7 @@ impl PacketProc<ReqClientLogin> for Client {
                 }
             });
 
+            let _ = send_pkt!(self.handle, RspClientLoginOk { agent_id, id });
             let _ = send_pkt!(agent, ReqAgentBuild { port, id });
             Ok(())
         }

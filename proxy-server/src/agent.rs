@@ -1,8 +1,9 @@
 use std::{future::Future, time::Duration};
 
 use protocol::{
-    PacketHbAgent, ReqAgentLogin, ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild,
-    RspAgentLoginFailed, RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
+    PacketHbAgent, PacketInfoClientClosed, PacketInfoConnectFailed, ReqAgentLogin,
+    ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild, RspAgentLoginFailed,
+    RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
 };
 use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
@@ -31,6 +32,7 @@ impl RegistryInit for Agent {
         register.insert::<PacketHbAgent>();
         register.insert::<ReqAgentLogin>();
         register.insert::<RspAgentBuild>();
+        register.insert::<PacketInfoConnectFailed>();
     }
 }
 
@@ -140,15 +142,38 @@ impl PacketProc<RspAgentBuild> for Agent {
                         );
                     } else if !pkt.ok && client.is_some() {
                         let _ = send_pkt!(client.unwrap(), RspClientLoginFailed {});
+                        let _ = send_pkt!(self.handle, PacketInfoClientClosed { id: pkt.id });
                         clientconns.remove(pkt.id);
                     } else {
-                        let _ = send_pkt!(self.handle, RspClientNotFound {});
+                        let _ = send_pkt!(self.handle, RspClientNotFound { id: pkt.id });
                     }
                 }
                 None => {
-                    unreachable!()
+                    return Err(std::io::ErrorKind::InvalidData.into());
                 }
             }
+            Ok(())
+        }
+    }
+}
+
+impl PacketProc<PacketInfoConnectFailed> for Agent {
+    type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
+
+    fn proc(&mut self, pkt: Box<PacketInfoConnectFailed>) -> Self::Output<'_> {
+        async move {
+            use dashmap::mapref::entry::Entry;
+            match CONNS.entry((pkt.agent_id, pkt.cid)) {
+                Entry::Occupied(e) => {
+                    e.get().remove(pkt.sid);
+                }
+                _ => {}
+            }
+            CLIENTS.get(&pkt.sid).map(|clients| {
+                clients.get_client(pkt.cid).map(|v| {
+                    let _ = send_pkt!(v, pkt);
+                });
+            });
             Ok(())
         }
     }
