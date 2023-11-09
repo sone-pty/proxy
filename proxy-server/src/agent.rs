@@ -169,7 +169,7 @@ impl PacketProc<PacketInfoConnectFailed> for Agent {
                 }
                 _ => {}
             }
-            CLIENTS.get(&pkt.sid).map(|clients| {
+            CLIENTS.get(&pkt.agent_id).map(|clients| {
                 clients.get_client(pkt.cid).map(|v| {
                     let _ = send_pkt!(v, pkt);
                 });
