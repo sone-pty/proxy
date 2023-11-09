@@ -137,11 +137,8 @@ impl RegistryInit for Client {
 impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
-        async {
-            let _ = send_pkt!(self.handle, pkt);
-            Ok(())
-        }
+    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
+        async { Ok(()) }
     }
 }
 
@@ -251,7 +248,14 @@ impl PacketProc<RspClientLoginOk> for Client {
     fn proc(&mut self, pkt: Box<RspClientLoginOk>) -> Self::Output<'_> {
         async move {
             if self.args.agentid == pkt.agent_id {
+                let handle = self.handle.clone();
                 self.id = Some(pkt.id);
+                tokio::spawn(async move {
+                    loop {
+                        let _ = send_pkt!(handle, PacketHbClient { id: pkt.id });
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                });
             } else {
                 self.handle.close();
                 exit(-1);

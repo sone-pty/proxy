@@ -1,170 +1,107 @@
-use std::{future::Future, time::Duration};
+use std::future::Future;
 
 use protocol::{
     PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspClientLoginOk,
     RspNewConnFailedClient, RspServiceNotFound,
 };
-use tokio::{
-    io::BufReader,
-    net::tcp::OwnedReadHalf,
-    sync::watch::{channel, Sender},
-};
-use vnpkt::tokio_ext::registry::{PacketProc, RegistryInit};
+use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
+use vnpkt::tokio_ext::registry::{PacketProc, Registry, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{
-    conn::{ClientConns, ClientInfo},
-    AGENTS, CLIENTS, CONNS,
-};
+use crate::AGENTS;
 
-pub struct Client {
+pub struct ClientHandler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
-    sx_client: Option<Sender<bool>>,
+    id: Option<u32>,
+    aid: Option<u32>,
 }
 
-impl Client {
+impl ClientHandler {
     pub fn new(handle: vnsvrbase::tokio_ext::tcp_link::Handle) -> Self {
         Self {
             handle,
-            sx_client: None,
+            id: None,
+            aid: None,
         }
     }
 }
 
-impl RegistryInit for Client {
+impl Drop for ClientHandler {
+    fn drop(&mut self) {
+        if self.aid.is_some() && self.id.is_some() {
+            let aid = self.aid.unwrap();
+            let id = self.id.unwrap();
+            let agents = AGENTS.read().unwrap();
+            agents.get(&aid).map(|v| {
+                let _ = send_pkt!(v.handle(), PacketInfoClientClosed { id });
+                v.remove_client(id);
+                println!("In the proxy.{}, Client.{} disconnected", aid, id);
+            });
+        }
+    }
+}
+
+impl RegistryInit for ClientHandler {
     type AsyncRead = BufReader<OwnedReadHalf>;
 
-    fn init(register: &mut vnpkt::tokio_ext::registry::Registry<Self>) {
-        register.insert::<PacketHbClient>();
+    fn init(register: &mut Registry<Self>) {
         register.insert::<ReqClientLogin>();
+        register.insert::<PacketHbClient>();
         register.insert::<RspNewConnFailedClient>();
     }
 }
 
-impl PacketProc<PacketHbClient> for Client {
+impl PacketProc<PacketHbClient> for ClientHandler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
-        async move {
-            self.sx_client.as_ref().map(|sx| {
-                let now = *sx.borrow();
-                sx.send_replace(!now);
-            });
+    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
+        async {
+            let _ = send_pkt!(self.handle, pkt);
             Ok(())
         }
     }
 }
 
-impl PacketProc<ReqClientLogin> for Client {
+impl PacketProc<ReqClientLogin> for ClientHandler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<ReqClientLogin>) -> Self::Output<'_> {
         async move {
-            let agent_id = pkt.id;
+            let aid = pkt.id;
             let port = pkt.port;
-            let agent_wrap = AGENTS.get(&agent_id);
+            let agents = AGENTS.read().unwrap();
+            let agent = agents.get(&aid);
 
-            if agent_wrap.is_none() {
+            if agent.is_none() {
                 let _ = send_pkt!(self.handle, RspServiceNotFound {});
                 return Ok(());
             }
-            let agent = agent_wrap.unwrap().clone();
+            let cid = agent.unwrap().insert_client(self.handle.clone(), port);
+            self.id = Some(cid);
 
-            use dashmap::mapref::entry::Entry;
-            let id = match CLIENTS.entry(agent_id) {
-                Entry::Vacant(e) => {
-                    let clientconns = ClientConns::new();
-                    let id = clientconns.insert(ClientInfo::new(
-                        clientconns.next(),
-                        port,
-                        self.handle.clone(),
-                        agent_id,
-                    ));
-                    e.insert(clientconns);
-                    id
+            let _ = send_pkt!(
+                self.handle,
+                RspClientLoginOk {
+                    agent_id: aid,
+                    id: cid,
                 }
-                Entry::Occupied(e) => {
-                    let clientconns = e.get();
-                    clientconns.insert(ClientInfo::new(
-                        clientconns.next(),
-                        port,
-                        self.handle.clone(),
-                        agent_id,
-                    ))
-                }
-            };
+            );
+            let _ = send_pkt!(agent.unwrap().handle(), ReqAgentBuild { port, id: cid });
 
-            let handle = self.handle.clone();
-            let agent_clone = agent.clone();
-            let (tsx, trx) = channel(false);
-            self.sx_client = Some(tsx);
-
-            tokio::spawn(async move {
-                'hb: loop {
-                    let (sx, mut rx) = channel(0);
-                    tokio::select! {
-                        _ = rx.changed() => {
-                            let id = *rx.borrow();
-                            if id > 0 {
-                                println!("With Proxy.{}, Client.{} Disconnected", agent_id, id);
-                                handle.close();
-                                let _ = send_pkt!(agent_clone, PacketInfoClientClosed {id});
-                                CLIENTS.get(&agent_id).map(|v| v.remove(id));
-                                CONNS.remove(&(agent_id, id));
-                                break 'hb;
-                            }
-                        }
-                        ret = async {
-                            match send_pkt!(handle, PacketHbClient {id}) {
-                                Err(_) => {
-                                    println!("With Proxy.{}, Client.{} Disconnected", agent_id, id);
-                                    handle.close();
-                                    let _ = send_pkt!(agent_clone, PacketInfoClientClosed {id});
-                                    CLIENTS.get(&agent_id).map(|v| v.remove(id));
-                                    CONNS.remove(&(agent_id, id));
-                                    return false;
-                                }
-                                _ => {}
-                            }
-                            // check heartbeat
-                            let mut hbrx = trx.clone();
-                            tokio::spawn(async move {
-                                tokio::select! {
-                                    _ = hbrx.changed() => {
-                                        hbrx.borrow_and_update();
-                                    }
-                                    _ = tokio::time::sleep(Duration::from_secs(5)) => {
-                                        let _ = sx.send(id);
-                                    }
-                                }
-                            });
-                            true
-                        } => {
-                            if !ret {
-                                break 'hb;
-                            }
-                        }
-                    }
-                    // HB interval
-                    tokio::time::sleep(Duration::from_secs(10)).await;
-                }
-            });
-
-            let _ = send_pkt!(self.handle, RspClientLoginOk { agent_id, id });
-            let _ = send_pkt!(agent, ReqAgentBuild { port, id });
             Ok(())
         }
     }
 }
 
-impl PacketProc<RspNewConnFailedClient> for Client {
+impl PacketProc<RspNewConnFailedClient> for ClientHandler {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
     fn proc(&mut self, pkt: Box<RspNewConnFailedClient>) -> Self::Output<'_> {
         async move {
             self.handle.close();
-            AGENTS.get(&pkt.agent_id).map(|v| {
-                let _ = send_pkt!(v, PacketInfoClientClosed { id: pkt.id });
+            let agents = AGENTS.read().unwrap();
+            agents.get(&pkt.agent_id).map(|agent| {
+                let _ = send_pkt!(agent.handle(), PacketInfoClientClosed { id: pkt.id });
             });
             Ok(())
         }
