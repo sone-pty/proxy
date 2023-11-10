@@ -117,10 +117,41 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                 let agents = AGENTS.read().unwrap();
                                                 agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                             }
-                                            let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
-                                            use tokio::io::AsyncWriteExt;
+
+                                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                                            let mut buf1 = [0u8; 1024];
+                                            let mut buf2 = [0u8; 1024];
+                                            loop {
+                                                tokio::select! {
+                                                    r = peer.read(&mut buf1) => {
+                                                        let len = match r {
+                                                            Ok(n) => n,
+                                                            Err(_) => break
+                                                        };
+                                                        if len == 0 { break; }
+
+                                                        match stream.write_all(&buf1[..len]).await {
+                                                            Err(_) => break,
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                    r = stream.read(&mut buf2) => {
+                                                        let len = match r {
+                                                            Ok(n) => n,
+                                                            Err(_) => break
+                                                        };
+                                                        if len == 0 { break; }
+
+                                                        match peer.write_all(&buf2[..len]).await {
+                                                            Err(_) => break,
+                                                            _ => {}
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             let _ = peer.shutdown().await;
                                             let _ = stream.shutdown().await;
+                                            //let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
                                         }
                                         _ => {}
                                     }
