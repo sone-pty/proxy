@@ -289,6 +289,9 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                             agent_id, sid, e
                                         ),
                                     }
+                                    use tokio::io::AsyncWriteExt;
+                                    let _ = local.shutdown().await;
+                                    let _ = remote.shutdown().await;
                                 });
 
                                 use dashmap::mapref::entry::Entry;
