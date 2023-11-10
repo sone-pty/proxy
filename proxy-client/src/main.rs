@@ -55,7 +55,10 @@ fn main() {
     }));
 
     rt.block_on(async {
-        let _ = main_loop(args).await;
+        if let Err(_) = main_loop(args).await {
+            println!("connect server failed");
+            exit(-1);
+        }
         let _ = quit_rx.changed().await;
     });
 }

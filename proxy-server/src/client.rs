@@ -78,6 +78,7 @@ impl PacketProc<ReqClientLogin> for ClientHandler {
             }
             let cid = agent.unwrap().insert_client(self.handle.clone(), port);
             self.id = Some(cid);
+            self.aid = Some(aid);
 
             let _ = send_pkt!(
                 self.handle,

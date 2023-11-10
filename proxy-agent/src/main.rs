@@ -59,7 +59,10 @@ fn main() {
     }));
 
     rt.block_on(async {
-        let _ = main_loop(args).await;
+        if let Err(_) = main_loop(args).await {
+            println!("connect server failed");
+            exit(-1);
+        }
         let _ = quit_rx.changed().await;
     });
 }
@@ -156,12 +159,7 @@ impl PacketProc<RspAgentLoginOk> for Handler {
             let id = self.args.id;
             tokio::spawn(async move {
                 loop {
-                    match send_pkt!(handle, PacketHbAgent { id }) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            break;
-                        }
-                    }
+                    let _ = send_pkt!(handle, PacketHbAgent { id });
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             });
