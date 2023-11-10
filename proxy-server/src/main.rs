@@ -108,20 +108,20 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             }
 
                             if rx_wrap.is_some() {
-                                match rx_wrap.unwrap().await {
-                                    Ok(mut peer) => {
-                                        println!("In the proxy.{}, conn.{} begin", agent_id, sid);
-                                        // remove conn
-                                        {
-                                            let agents = AGENTS.read().unwrap();
-                                            agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
-                                        }
-                                        tokio::spawn(async move {
+                                tokio::spawn(async move {
+                                    match rx_wrap.unwrap().await {
+                                        Ok(mut peer) => {
+                                            println!("In the proxy.{}, conn.{} begin", agent_id, sid);
+                                            // remove conn
+                                            {
+                                                let agents = AGENTS.read().unwrap();
+                                                agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
+                                            }
                                             let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
-                                        });
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
-                                }
+                                });
                             }
                         } else {
                             let agents = AGENTS.read().unwrap();
