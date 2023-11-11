@@ -188,43 +188,13 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .await
                     .is_ok()
                     {
-                        let task = tokio::spawn(async move {
-                            // let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
-                            use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                            let mut buf1 = [0u8; 1024];
-                            let mut buf2 = [0u8; 1024];
-                            loop {
-                                tokio::select! {
-                                    r = local.read(&mut buf1) => {
-                                        let len = match r {
-                                            Ok(n) => n,
-                                            Err(_) => break
-                                        };
-                                        if len == 0 { break; }
-
-                                        match remote.write_all(&buf1[..len]).await {
-                                            Err(_) => break,
-                                            _ => {}
-                                        }
-                                    }
-                                    r = remote.read(&mut buf2) => {
-                                        let len = match r {
-                                            Ok(n) => n,
-                                            Err(_) => break
-                                        };
-                                        if len == 0 { break; }
-
-                                        match local.write_all(&buf2[..len]).await {
-                                            Err(_) => break,
-                                            _ => {}
-                                        }
-                                    }
-                                }
-                            }
-                            let _ = local.shutdown().await;
-                            let _ = remote.shutdown().await;
-                        });
-                        LOCALS.insert(pkt.sid, task);
+                        LOCALS.insert(
+                            pkt.sid,
+                            tokio::spawn(async move {
+                                let _ =
+                                    tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                            }),
+                        );
                     } else {
                         println!("send pkt id to server failed");
                         let _ = send_pkt!(

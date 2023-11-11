@@ -275,53 +275,20 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                         match conns.remove(&pkt.sid) {
                             Some((_, mut local)) => {
                                 let task = tokio::spawn(async move {
-                                    // match tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                    // .await
-                                    // {
-                                    // Ok(_) => {
-                                    // println!(
-                                    // "In ({}).proxy, local Conn.{} disconnected",
-                                    // agent_id, sid
-                                    // )
-                                    // }
-                                    // Err(e) => println!(
-                                    // "In ({}).proxy, local conn.{} error: {}",
-                                    // agent_id, sid, e
-                                    // ),
-                                    // }
-                                    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-                                    let mut buf1 = [0u8; 1024];
-                                    let mut buf2 = [0u8; 1024];
-                                    loop {
-                                        tokio::select! {
-                                            r = local.read(&mut buf1) => {
-                                                let len = match r {
-                                                    Ok(n) => n,
-                                                    Err(_) => break
-                                                };
-                                                if len == 0 { break; }
-
-                                                match remote.write_all(&buf1[..len]).await {
-                                                    Err(_) => break,
-                                                    _ => {}
-                                                }
-                                            }
-                                            r = remote.read(&mut buf2) => {
-                                                let len = match r {
-                                                    Ok(n) => n,
-                                                    Err(_) => break
-                                                };
-                                                if len == 0 { break; }
-
-                                                match local.write_all(&buf2[..len]).await {
-                                                    Err(_) => break,
-                                                    _ => {}
-                                                }
-                                            }
+                                    match tokio::io::copy_bidirectional(&mut local, &mut remote)
+                                        .await
+                                    {
+                                        Ok(_) => {
+                                            println!(
+                                                "In ({}).proxy, local conn.{} disconnected",
+                                                agent_id, sid
+                                            )
                                         }
+                                        Err(e) => println!(
+                                            "In ({}).proxy, local conn.{} error: {}",
+                                            agent_id, sid, e
+                                        ),
                                     }
-                                    let _ = local.shutdown().await;
-                                    let _ = remote.shutdown().await;
                                 });
 
                                 use dashmap::mapref::entry::Entry;
