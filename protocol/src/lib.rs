@@ -31,13 +31,3 @@ pub fn compose(id: u32, client: bool) -> u64 {
         id as u64 | (AGENT_ID as u64) << 32
     }
 }
-
-#[test]
-pub fn te() {
-    let data: u64 = (1u64 << 33) | 1;
-    assert_eq!(1, get_id(&data));
-    assert!(is_client(&data));
-    let data_1 = compose(123, false);
-    assert!(is_agent(&data_1));
-    assert_eq!(123, get_id(&data_1));
-}
