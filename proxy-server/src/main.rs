@@ -117,10 +117,11 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                 let agents = AGENTS.read().unwrap();
                                                 agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                             }
-                                            let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
-                                            use tokio::io::AsyncWriteExt;
-                                            let _ = peer.shutdown().await;
-                                            let _ = stream.shutdown().await;
+                                            if let Err(_) = tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
+                                                use tokio::io::AsyncWriteExt;
+                                                let _ = peer.shutdown().await;
+                                                let _ = stream.shutdown().await;
+                                            }
                                         }
                                         _ => {}
                                     }

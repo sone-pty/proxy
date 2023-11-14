@@ -189,10 +189,13 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .is_ok()
                     {
                         let task = tokio::spawn(async move {
-                            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
-                            use tokio::io::AsyncWriteExt;
-                            let _ = local.shutdown().await;
-                            let _ = remote.shutdown().await;
+                            if let Err(_) =
+                                tokio::io::copy_bidirectional(&mut local, &mut remote).await
+                            {
+                                use tokio::io::AsyncWriteExt;
+                                let _ = local.shutdown().await;
+                                let _ = remote.shutdown().await;
+                            }
                         });
                         LOCALS.insert(pkt.sid, task);
                     } else {
