@@ -111,27 +111,18 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             if rx_wrap.is_some() {
                                 tokio::spawn(async move {
                                     match rx_wrap.unwrap().await {
-                                        Ok(peer) => {
-                                            println!("In the proxy.{}, conn.{} begin", agent_id, sid);
-                                            // remove conn
-                                            {
-                                                let agents = AGENTS.read().unwrap();
-                                                agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
-                                            }
+                                        Ok(mut peer) => {
+                                            tokio::spawn(async move {
+                                                println!("In the proxy.{}, conn.{} begin", agent_id, sid);
+                                                // remove conn
+                                                {
+                                                    let agents = AGENTS.read().unwrap();
+                                                    agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
+                                                }
 
-                                            let wrap_peer = tokio_io_timeout::TimeoutStream::new(peer);
-                                            let mut wrap_stream = tokio_io_timeout::TimeoutStream::new(stream);
-                                            wrap_stream.set_read_timeout(Some(Duration::from_secs(30)));
-                                            tokio::pin!(wrap_peer);
-                                            tokio::pin!(wrap_stream);
-
-                                            if let Err(_) = tokio::io::copy_bidirectional(&mut wrap_peer, &mut wrap_stream).await {
-                                                use tokio::io::AsyncWriteExt;
-                                                let _ = wrap_peer.shutdown().await;
-                                                let _ = wrap_stream.shutdown().await;
-                                                println!("Timeout or err ret, in the proxy.{}, conn.{} shutdown", agent_id, sid);
-                                            }
-                                            println!("In the proxy.{}, conn.{} end", agent_id, sid);
+                                                let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
+                                                println!("In the proxy.{}, conn.{} end", agent_id, sid);
+                                            });
                                         }
                                         _ => {}
                                     }
