@@ -280,7 +280,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                     {
                                         Ok(_) => {
                                             println!(
-                                                "In ({}).proxy, local Conn.{} disconnected",
+                                                "In ({}).proxy, local conn.{} disconnected",
                                                 agent_id, sid
                                             )
                                         }
