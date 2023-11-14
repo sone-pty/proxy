@@ -119,10 +119,11 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                 agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                             }
 
-                                            let mut wrap_peer = tokio_io_timeout::TimeoutStream::new(peer);
-                                            let wrap_stream = tokio_io_timeout::TimeoutStream::new(stream);
-                                            wrap_peer.set_read_timeout(Some(Duration::from_secs(30)));
-                                            //wrap_stream.set_read_timeout(Some(Duration::from_secs(30)));
+                                            let wrap_peer = tokio_io_timeout::TimeoutStream::new(peer);
+                                            let mut wrap_stream = tokio_io_timeout::TimeoutStream::new(stream);
+                                            //wrap_peer.set_read_timeout(Some(Duration::from_secs(30)));
+                                            wrap_stream.set_read_timeout(Some(Duration::from_secs(30)));
+                                            wrap_stream.set_write_timeout(Some(Duration::from_secs(30)));
                                             tokio::pin!(wrap_peer);
                                             tokio::pin!(wrap_stream);
 
