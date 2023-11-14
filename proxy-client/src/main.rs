@@ -173,7 +173,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         let agent_id = self.args.agentid;
         async move {
-            if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
+            if let Ok(local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) =
                     TcpStream::connect((self.args.server.as_str(), self.args.server_conn_port))
                         .await
@@ -189,12 +189,19 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .is_ok()
                     {
                         let task = tokio::spawn(async move {
+                            let wrap_local = tokio_io_timeout::TimeoutStream::new(local);
+                            let mut wrap_remote = tokio_io_timeout::TimeoutStream::new(remote);
+                            wrap_remote.set_read_timeout(Some(Duration::from_secs(30)));
+                            tokio::pin!(wrap_local);
+                            tokio::pin!(wrap_remote);
+
                             if let Err(_) =
-                                tokio::io::copy_bidirectional(&mut local, &mut remote).await
+                                tokio::io::copy_bidirectional(&mut wrap_local, &mut wrap_remote)
+                                    .await
                             {
                                 use tokio::io::AsyncWriteExt;
-                                let _ = local.shutdown().await;
-                                let _ = remote.shutdown().await;
+                                let _ = wrap_local.shutdown().await;
+                                let _ = wrap_remote.shutdown().await;
                             }
                         });
                         LOCALS.insert(pkt.sid, task);

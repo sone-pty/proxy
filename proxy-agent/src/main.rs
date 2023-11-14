@@ -273,26 +273,27 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                 {
                     if let Some(conns) = self.conns.get(&pkt.id) {
                         match conns.remove(&pkt.sid) {
-                            Some((_, mut local)) => {
+                            Some((_, local)) => {
                                 let task = tokio::spawn(async move {
-                                    match tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                        .await
+                                    let wrap_local = tokio_io_timeout::TimeoutStream::new(local);
+                                    let mut wrap_remote =
+                                        tokio_io_timeout::TimeoutStream::new(remote);
+                                    wrap_remote.set_read_timeout(Some(Duration::from_secs(30)));
+                                    tokio::pin!(wrap_local);
+                                    tokio::pin!(wrap_remote);
+
+                                    match tokio::io::copy_bidirectional(
+                                        &mut wrap_local,
+                                        &mut wrap_remote,
+                                    )
+                                    .await
                                     {
-                                        Ok(_) => {
-                                            println!(
-                                                "In ({}).proxy, local conn.{} disconnected",
-                                                agent_id, sid
-                                            )
-                                        }
-                                        Err(e) => {
-                                            println!(
-                                                "In ({}).proxy, local conn.{} error: {}",
-                                                agent_id, sid, e
-                                            );
+                                        Err(_) => {
                                             use tokio::io::AsyncWriteExt;
-                                            let _ = local.shutdown().await;
-                                            let _ = remote.shutdown().await;
+                                            let _ = wrap_local.shutdown().await;
+                                            let _ = wrap_remote.shutdown().await;
                                         }
+                                        _ => {}
                                     }
                                 });
 
