@@ -17,6 +17,7 @@ use protocol::{
     ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk,
     RspClientNotFound,
 };
+use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpListener, TcpStream},
@@ -59,14 +60,17 @@ fn main() {
     }));
 
     rt.block_on(async {
-        let _ = main_loop(args).await;
+        if let Err(_) = main_loop(args).await {
+            println!("connect server failed");
+            exit(-1);
+        }
         let _ = quit_rx.changed().await;
     });
 }
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("Connect Server Success");
+    println!("connect server success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqAgentLogin { id: args.id });
@@ -82,15 +86,20 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         seed: Arc::new(AtomicU32::new(0)),
         args,
     };
+    let cnt = AtomicU32::new(0);
+
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                link.handle().close();
-                eprintln!("Recv From Server Timeout");
-                exit(-1);
+            _ = tokio::time::sleep(Duration::from_secs(20)) => {
+                if cnt.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 3 {
+                    println!("recv from server timeout 3 times, conn closed");
+                    link.handle().close();
+                    exit(-1);
+                }
             }
             res = async {
                 let pid = link.read.read_compressed_u64().await?;
+                cnt.store(0, std::sync::atomic::Ordering::SeqCst);
                 let register = &*REGISTRY;
 
                 if pid > u32::MAX as u64 {
@@ -105,7 +114,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    eprintln!("Error: {}", e);
+                    println!("error: {}", e);
                     exit(-1);
                 }
             }
@@ -151,14 +160,8 @@ impl PacketProc<RspAgentLoginOk> for Handler {
             let id = self.args.id;
             tokio::spawn(async move {
                 loop {
-                    match send_pkt!(handle, PacketHbAgent { id }) {
-                        Ok(_) => {}
-                        Err(_) => {
-                            // TODO
-                            break;
-                        }
-                    }
-                    tokio::time::sleep(Duration::from_secs(10)).await;
+                    let _ = send_pkt!(handle, PacketHbAgent { id });
+                    tokio::time::sleep(Duration::from_secs(5)).await;
                 }
             });
             Ok(())
@@ -171,7 +174,7 @@ impl PacketProc<RspAgentLoginFailed> for Handler {
 
     fn proc(&mut self, _: Box<RspAgentLoginFailed>) -> Self::Output<'_> {
         async {
-            println!("Login Server Failed");
+            println!("login server failed");
             self.handle.close();
             exit(-1);
         }
@@ -193,7 +196,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
                     Ok(listener) => {
-                        println!("({}).Proxy[{}] Begin", agent_id, pkt.port);
+                        println!("({}).proxy[{}] begin", agent_id, pkt.port);
                         loop {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
@@ -212,7 +215,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                     }
                                 }
                                 println!(
-                                    "({}).Proxy[{}], Local Conn.{} Build",
+                                    "({}).proxy[{}], local conn.{} build",
                                     agent_id, pkt.port, sid
                                 );
                                 // send to server
@@ -271,21 +274,23 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                 {
                     if let Some(conns) = self.conns.get(&pkt.id) {
                         match conns.remove(&pkt.sid) {
-                            Some((_, mut local)) => {
+                            Some((_, local)) => {
                                 let task = tokio::spawn(async move {
-                                    match tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                        .await
+                                    let mut wrap_local = TimeoutStream::new(local);
+                                    let mut wrap_remote = TimeoutStream::new(remote);
+                                    wrap_local.set_timeout(Some(Duration::from_secs(30)));
+                                    wrap_remote.set_timeout(Some(Duration::from_secs(30)));
+                                    tokio::pin!(wrap_local);
+                                    tokio::pin!(wrap_remote);
+                                    if let Err(_) = tokio::io::copy_bidirectional(
+                                        &mut wrap_local,
+                                        &mut wrap_remote,
+                                    )
+                                    .await
                                     {
-                                        Ok(_) => {
-                                            println!(
-                                                "In ({}).Proxy, Local Conn.{} Disconnected",
-                                                agent_id, sid
-                                            )
-                                        }
-                                        Err(e) => println!(
-                                            "In ({}).Proxy, Local Conn.{} Error: {}",
-                                            agent_id, sid, e
-                                        ),
+                                        use tokio::io::AsyncWriteExt;
+                                        let _ = wrap_local.shutdown().await;
+                                        let _ = wrap_remote.shutdown().await;
                                     }
                                 });
 
@@ -312,7 +317,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                     }
                 }
                 let _ = send_pkt!(self.handle, PacketInfoConnectFailed { agent_id, cid, sid });
-                println!("Connect Server Conn Port Failed");
+                println!("connect server conn port failed");
             }
             Ok(())
         }
@@ -348,7 +353,7 @@ impl Handler {
             for (_, v) in conns {
                 v.abort();
             }
-            println!("({}).Proxy[{}] Shutdown", self.args.id, port);
+            println!("({}).proxy[{}] shutdown", self.args.id, port);
         }
         Ok(())
     }

@@ -3,18 +3,18 @@
 #![feature(async_closure)]
 #![feature(sync_unsafe_cell)]
 
-use std::sync::LazyLock;
-
-use agent::Agent;
-use clap::Parser;
-use client::Client;
-use conn::{ClientConns, Conns};
-use dashmap::DashMap;
-use protocol::{get_id, is_client, BOUDARY};
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::mpsc,
+use std::{
+    collections::HashMap,
+    sync::{LazyLock, RwLock},
+    time::Duration,
 };
+
+use agent::AgentHandler;
+use clap::Parser;
+use client::ClientHandler;
+use conn::Agent;
+use timeout_stream::TimeoutStream;
+use tokio::net::{TcpListener, TcpStream};
 use vnpkt::tokio_ext::{io::AsyncReadExt, registry::Registry};
 use vnsvrbase::{process::hook_terminate_signal, tokio_ext::tcp_link::TcpLink};
 
@@ -22,12 +22,10 @@ mod agent;
 mod client;
 mod conn;
 
-static REGISTRY_CLIENT: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
-static REGISTRY_AGENT: LazyLock<Registry<Agent>> = LazyLock::new(Registry::new);
-static CLIENTS: LazyLock<DashMap<u32, ClientConns>> = LazyLock::new(|| DashMap::new());
-static AGENTS: LazyLock<DashMap<u32, vnsvrbase::tokio_ext::tcp_link::Handle>> =
-    LazyLock::new(|| DashMap::new());
-static CONNS: LazyLock<DashMap<(u32, u32), Conns>> = LazyLock::new(|| DashMap::new());
+static REGISTRY_CLIENT: LazyLock<Registry<ClientHandler>> = LazyLock::new(Registry::new);
+static REGISTRY_AGENT: LazyLock<Registry<AgentHandler>> = LazyLock::new(Registry::new);
+static AGENTS: LazyLock<RwLock<HashMap<u32, Agent>>> =
+    LazyLock::new(|| RwLock::new(HashMap::new()));
 
 #[derive(Parser)]
 struct Args {
@@ -43,14 +41,14 @@ fn main() {
     }));
 
     let rt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(3)
         .enable_time()
         .enable_io()
         .build()
         .unwrap();
 
     let wrt = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(2)
+        .worker_threads(1)
         .enable_time()
         .enable_io()
         .build()
@@ -70,12 +68,17 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
 
     tokio::select! {
         _ = async {
-            let (sender, mut recv) = mpsc::channel::<TcpStream>(1000);
+            let (sender, mut recv) = tokio::sync::mpsc::channel::<TcpStream>(1000);
             let sender_clone = sender.clone();
             tokio::spawn(async move {
                 loop {
-                    if let Ok((stream, _)) = listener.accept().await {
-                        let _ = sender_clone.send(stream).await;
+                    match listener.accept().await {
+                        Ok((stream, _)) => {
+                            let _ = sender_clone.send(stream).await;
+                        }
+                        Err(e) => {
+                            println!("main listener accept failed: {}", e);
+                        }
                     }
                 }
             });
@@ -96,39 +99,49 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                     if let (Ok(agent_id), Ok(cid), Ok(data)) = async {
                         (stream.read_u32().await, stream.read_u32().await, stream.read_compressed_u64().await)
                     }.await {
-                        let sid = get_id(&data);
-                        if !CONNS.contains_key(&(agent_id, cid)) {
-                            continue;
-                        }
+                        let sid = protocol::get_id(&data);
 
-                        if is_client(&data) {
-                            let rx_wrap = CONNS.get(&(agent_id, cid)).unwrap().get_rx(sid);
+                        if protocol::is_client(&data) {
+                            #[allow(unused_assignments)]
+                            let mut rx_wrap = None;
+                            {
+                                let agents = AGENTS.read().unwrap();
+                                rx_wrap = agents.get(&agent_id).map_or(None, |agent| agent.get_conn_rx(cid, sid));
+                            }
+
                             if rx_wrap.is_some() {
                                 tokio::spawn(async move {
                                     match rx_wrap.unwrap().await {
-                                        Ok(mut peer) => {
-                                            println!("With Proxy.{}, Conn.{} Begin", agent_id, sid);
+                                        Ok(peer) => {
                                             tokio::spawn(async move {
-                                                CONNS.get(&(agent_id, cid)).map(|v| {
-                                                    v.remove(sid);
-                                                });
-                                                match tokio::io::copy_bidirectional(&mut peer, &mut stream).await {
-                                                    Ok(_) => println!("With Proxy.{}, Conn.{} Disconnected", agent_id, sid),
-                                                    Err(e) => println!("With Proxy.{}, Conn.{} Error: {}", agent_id, sid, e)
+                                                println!("In the proxy.{}, conn.{} begin", agent_id, sid);
+                                                // remove conn
+                                                {
+                                                    let agents = AGENTS.read().unwrap();
+                                                    agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                                 }
+
+                                                let mut wrap_peer = TimeoutStream::new(peer);
+                                                let mut wrap_stream = TimeoutStream::new(stream);
+                                                wrap_peer.set_timeout(Some(Duration::from_secs(30)));
+                                                wrap_stream.set_timeout(Some(Duration::from_secs(30)));
+                                                tokio::pin!(wrap_peer);
+                                                tokio::pin!(wrap_stream);
+                                                if let Err(_) = tokio::io::copy_bidirectional(&mut wrap_peer, &mut wrap_stream).await {
+                                                    use tokio::io::AsyncWriteExt;
+                                                    let _ = wrap_peer.shutdown().await;
+                                                    let _ = wrap_stream.shutdown().await;
+                                                }
+                                                println!("In the proxy.{}, conn.{} end", agent_id, sid);
                                             });
-                                        },
+                                        }
                                         _ => {}
                                     }
                                 });
                             }
                         } else {
-                            match CONNS.get(&(agent_id, cid)).unwrap().get_sx(sid) {
-                                Some(sx) => {
-                                    let _ = sx.send(stream);
-                                },
-                                _ => {}
-                            }
+                            let agents = AGENTS.read().unwrap();
+                            agents.get(&agent_id).map(|agent| agent.get_conn_sx(cid, sid).map(|sx| sx.send(stream)));
                         }
                     }
                 }
@@ -141,8 +154,8 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
 async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
     let mut pid = link.read.read_compressed_u64().await?;
     if pid <= u32::MAX as _ {
-        if (pid as u32) < BOUDARY {
-            let mut client = Client::new(link.handle().clone());
+        if (pid as u32) < protocol::BOUDARY {
+            let mut client = ClientHandler::new(link.handle().clone());
             let register_client = &*REGISTRY_CLIENT;
 
             loop {
@@ -157,7 +170,7 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
                 return Err(std::io::ErrorKind::InvalidData.into());
             }
         } else {
-            let mut agent = Agent::new(link.handle().clone());
+            let mut agent = AgentHandler::new(link.handle().clone());
             let register_agent = &*REGISTRY_AGENT;
 
             loop {
@@ -174,17 +187,4 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
         }
     }
     Err(std::io::ErrorKind::InvalidData.into())
-}
-
-pub fn reset(id: u32) {
-    CLIENTS.get(&id).map(|v| v.clear());
-    let mut keys = Vec::new();
-    let _ = CONNS
-        .iter()
-        .filter(|v| v.key().0 == id)
-        .map(|v| keys.push(*v.key()));
-    for key in keys {
-        CONNS.remove(&key);
-    }
-    AGENTS.remove(&id);
 }

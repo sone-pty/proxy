@@ -2,7 +2,12 @@
 #![feature(lazy_cell)]
 #![feature(impl_trait_in_assoc_type)]
 
-use std::{future::Future, process::exit, sync::LazyLock, time::Duration};
+use std::{
+    future::Future,
+    process::exit,
+    sync::{atomic::AtomicU32, LazyLock},
+    time::Duration,
+};
 
 use clap::Parser;
 use dashmap::DashMap;
@@ -10,6 +15,7 @@ use protocol::{
     compose, PacketHbClient, PacketInfoConnectFailed, ReqClientLogin, ReqNewConnectionClient,
     RspClientLoginFailed, RspClientLoginOk, RspNewConnFailedClient, RspServiceNotFound,
 };
+use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpStream},
@@ -50,14 +56,17 @@ fn main() {
     }));
 
     rt.block_on(async {
-        let _ = main_loop(args).await;
+        if let Err(_) = main_loop(args).await {
+            println!("connect server failed");
+            exit(-1);
+        }
         let _ = quit_rx.changed().await;
     });
 }
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("Connect Server Success");
+    println!("connect server success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(
@@ -74,15 +83,20 @@ async fn main_loop(args: Args) -> std::io::Result<()> {
 
 async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
     let mut client = Client::new(link.handle().clone(), args);
+    let cnt = AtomicU32::new(0);
+
     loop {
         tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(15)) => {
-                link.handle().close();
-                eprintln!("Recv From Server Timeout");
-                exit(-1);
+            _ = tokio::time::sleep(Duration::from_secs(20)) => {
+                if cnt.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 3 {
+                    println!("recv from server timeout 3 times, conn closed");
+                    link.handle().close();
+                    exit(-1);
+                }
             }
             res = async {
                 let pid = link.read.read_compressed_u64().await?;
+                cnt.store(0, std::sync::atomic::Ordering::SeqCst);
                 let register = &*REGISTRY;
 
                 if pid > u32::MAX as u64 {
@@ -97,7 +111,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    eprintln!("Error: {}", e);
+                    println!("error: {}", e);
                     exit(-1);
                 }
             }
@@ -137,11 +151,8 @@ impl RegistryInit for Client {
 impl PacketProc<PacketHbClient> for Client {
     type Output<'a> = impl Future<Output = std::io::Result<()>> + 'a where Self: 'a;
 
-    fn proc(&mut self, pkt: Box<PacketHbClient>) -> Self::Output<'_> {
-        async {
-            let _ = send_pkt!(self.handle, pkt);
-            Ok(())
-        }
+    fn proc(&mut self, _: Box<PacketHbClient>) -> Self::Output<'_> {
+        async { Ok(()) }
     }
 }
 
@@ -150,7 +161,7 @@ impl PacketProc<RspClientLoginFailed> for Client {
 
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
-            println!("Client Login Failed, No Active Proxy Server");
+            println!("client login failed, proxy build listener failed");
             self.handle.close();
             exit(-1);
         }
@@ -163,7 +174,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         let agent_id = self.args.agentid;
         async move {
-            if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
+            if let Ok(local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) =
                     TcpStream::connect((self.args.server.as_str(), self.args.server_conn_port))
                         .await
@@ -179,11 +190,24 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .is_ok()
                     {
                         let task = tokio::spawn(async move {
-                            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                            let mut wrap_local = TimeoutStream::new(local);
+                            let mut wrap_remote = TimeoutStream::new(remote);
+                            wrap_local.set_timeout(Some(Duration::from_secs(30)));
+                            wrap_remote.set_timeout(Some(Duration::from_secs(30)));
+                            tokio::pin!(wrap_local);
+                            tokio::pin!(wrap_remote);
+                            if let Err(_) =
+                                tokio::io::copy_bidirectional(&mut wrap_local, &mut wrap_remote)
+                                    .await
+                            {
+                                use tokio::io::AsyncWriteExt;
+                                let _ = wrap_local.shutdown().await;
+                                let _ = wrap_remote.shutdown().await;
+                            }
                         });
                         LOCALS.insert(pkt.sid, task);
                     } else {
-                        println!("Send Pkt Id to Server Failed");
+                        println!("send pkt id to server failed");
                         let _ = send_pkt!(
                             self.handle,
                             RspNewConnFailedClient {
@@ -194,7 +218,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                         );
                     }
                 } else {
-                    println!("Connect Remote Server Failed");
+                    println!("connect remote server failed");
                     let _ = send_pkt!(
                         self.handle,
                         RspNewConnFailedClient {
@@ -205,7 +229,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     );
                 }
             } else {
-                println!("Connect Target Failed");
+                println!("connect target failed");
                 let _ = send_pkt!(
                     self.handle,
                     RspNewConnFailedClient {
@@ -225,7 +249,7 @@ impl PacketProc<RspServiceNotFound> for Client {
 
     fn proc(&mut self, _: Box<RspServiceNotFound>) -> Self::Output<'_> {
         async {
-            println!("Service Is Not Found");
+            println!("service is not found");
             self.handle.close();
             exit(-1);
         }
@@ -238,6 +262,7 @@ impl PacketProc<PacketInfoConnectFailed> for Client {
     fn proc(&mut self, pkt: Box<PacketInfoConnectFailed>) -> Self::Output<'_> {
         async move {
             if pkt.agent_id == self.args.agentid && self.id.is_some_and(|v| v == pkt.cid) {
+                println!("Info AgentConnectFailed");
                 LOCALS.remove(&pkt.sid).map(|(_, v)| v.abort());
             }
             Ok(())
@@ -251,7 +276,14 @@ impl PacketProc<RspClientLoginOk> for Client {
     fn proc(&mut self, pkt: Box<RspClientLoginOk>) -> Self::Output<'_> {
         async move {
             if self.args.agentid == pkt.agent_id {
+                let handle = self.handle.clone();
                 self.id = Some(pkt.id);
+                tokio::spawn(async move {
+                    loop {
+                        let _ = send_pkt!(handle, PacketHbClient { id: pkt.id });
+                        tokio::time::sleep(Duration::from_secs(5)).await;
+                    }
+                });
             } else {
                 self.handle.close();
                 exit(-1);
