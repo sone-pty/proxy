@@ -190,8 +190,10 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .is_ok()
                     {
                         let task = tokio::spawn(async move {
-                            let wrap_local = TimeoutStream::new(local);
-                            let wrap_remote = TimeoutStream::new(remote);
+                            let mut wrap_local = TimeoutStream::new(local);
+                            let mut wrap_remote = TimeoutStream::new(remote);
+                            wrap_local.set_timeout(Some(Duration::from_secs(30)));
+                            wrap_remote.set_timeout(Some(Duration::from_secs(30)));
                             tokio::pin!(wrap_local);
                             tokio::pin!(wrap_remote);
                             if let Err(_) =

@@ -6,6 +6,7 @@
 use std::{
     collections::HashMap,
     sync::{LazyLock, RwLock},
+    time::Duration,
 };
 
 use agent::AgentHandler;
@@ -120,8 +121,10 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                     agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                                 }
 
-                                                let wrap_peer = TimeoutStream::new(peer);
-                                                let wrap_stream = TimeoutStream::new(stream);
+                                                let mut wrap_peer = TimeoutStream::new(peer);
+                                                let mut wrap_stream = TimeoutStream::new(stream);
+                                                wrap_peer.set_timeout(Some(Duration::from_secs(30)));
+                                                wrap_stream.set_timeout(Some(Duration::from_secs(30)));
                                                 tokio::pin!(wrap_peer);
                                                 tokio::pin!(wrap_stream);
                                                 if let Err(_) = tokio::io::copy_bidirectional(&mut wrap_peer, &mut wrap_stream).await {
