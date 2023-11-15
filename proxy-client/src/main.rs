@@ -15,6 +15,7 @@ use protocol::{
     compose, PacketHbClient, PacketInfoConnectFailed, ReqClientLogin, ReqNewConnectionClient,
     RspClientLoginFailed, RspClientLoginOk, RspNewConnFailedClient, RspServiceNotFound,
 };
+use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpStream},
@@ -173,7 +174,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
     fn proc(&mut self, pkt: Box<ReqNewConnectionClient>) -> Self::Output<'_> {
         let agent_id = self.args.agentid;
         async move {
-            if let Ok(mut local) = TcpStream::connect(self.args.local.as_str()).await {
+            if let Ok(local) = TcpStream::connect(self.args.local.as_str()).await {
                 if let Ok(mut remote) =
                     TcpStream::connect((self.args.server.as_str(), self.args.server_conn_port))
                         .await
@@ -189,7 +190,18 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .is_ok()
                     {
                         let task = tokio::spawn(async move {
-                            let _ = tokio::io::copy_bidirectional(&mut local, &mut remote).await;
+                            let wrap_local = TimeoutStream::new(local);
+                            let wrap_remote = TimeoutStream::new(remote);
+                            tokio::pin!(wrap_local);
+                            tokio::pin!(wrap_remote);
+                            if let Err(_) =
+                                tokio::io::copy_bidirectional(&mut wrap_local, &mut wrap_remote)
+                                    .await
+                            {
+                                use tokio::io::AsyncWriteExt;
+                                let _ = wrap_local.shutdown().await;
+                                let _ = wrap_remote.shutdown().await;
+                            }
                         });
                         LOCALS.insert(pkt.sid, task);
                     } else {

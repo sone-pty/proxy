@@ -11,7 +11,7 @@ vnpkt = { path = "../../vnpkt" }
 protocol = { path = "../protocol" }
 dashmap = "4.0.2"
 clap = { version = "4.1.8", features = ["derive"] }
-tokio-io-timeout = "1.2.0"
+timeout-stream = { path = "../timeout-stream" }
 
 [dependencies.tokio]
 version = "1.25"

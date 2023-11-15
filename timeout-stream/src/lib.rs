@@ -21,6 +21,7 @@ pin_project! {
     }
 }
 
+#[allow(dead_code)]
 impl TimeoutState {
     #[inline]
     fn new() -> TimeoutState {
@@ -83,6 +84,7 @@ pin_project! {
     pub struct TimeoutStream<S> {
         #[pin]
         stream: S,
+        #[pin]
         state: TimeoutState,
     }
 }
@@ -96,5 +98,88 @@ where
             stream,
             state: TimeoutState::new(),
         }
+    }
+
+    pub fn set_timeout(&mut self, timeout: Option<Duration>) {
+        self.state.set_timeout(timeout);
+    }
+}
+
+impl<S> AsyncRead for TimeoutStream<S>
+where
+    S: AsyncRead,
+{
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.project();
+        let r = this.stream.poll_read(cx, buf);
+        match r {
+            Poll::Pending => this.state.poll_check(cx)?,
+            _ => this.state.reset(),
+        }
+        r
+    }
+}
+
+impl<S> AsyncWrite for TimeoutStream<S>
+where
+    S: AsyncWrite,
+{
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Result<(), std::io::Error>> {
+        let this = self.project();
+        let r = this.stream.poll_flush(cx);
+        match r {
+            Poll::Pending => this.state.poll_check(cx)?,
+            _ => this.state.reset(),
+        }
+        r
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.stream.is_write_vectored()
+    }
+
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Result<(), std::io::Error>> {
+        let this = self.project();
+        let r = this.stream.poll_shutdown(cx);
+        match r {
+            Poll::Pending => this.state.poll_check(cx)?,
+            _ => this.state.reset(),
+        }
+        r
+    }
+
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let this = self.project();
+        let r = this.stream.poll_write(cx, buf);
+        match r {
+            Poll::Pending => this.state.poll_check(cx)?,
+            _ => this.state.reset(),
+        }
+        r
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[std::io::IoSlice<'_>],
+    ) -> Poll<Result<usize, std::io::Error>> {
+        let this = self.project();
+        let r = this.stream.poll_write_vectored(cx, bufs);
+        match r {
+            Poll::Pending => this.state.poll_check(cx)?,
+            _ => this.state.reset(),
+        }
+        r
     }
 }

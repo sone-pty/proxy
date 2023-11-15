@@ -17,6 +17,7 @@ use protocol::{
     ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk,
     RspClientNotFound,
 };
+use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
     net::{tcp::OwnedReadHalf, TcpListener, TcpStream},
@@ -273,10 +274,22 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                 {
                     if let Some(conns) = self.conns.get(&pkt.id) {
                         match conns.remove(&pkt.sid) {
-                            Some((_, mut local)) => {
+                            Some((_, local)) => {
                                 let task = tokio::spawn(async move {
-                                    let _ = tokio::io::copy_bidirectional(&mut local, &mut remote)
-                                        .await;
+                                    let wrap_local = TimeoutStream::new(local);
+                                    let wrap_remote = TimeoutStream::new(remote);
+                                    tokio::pin!(wrap_local);
+                                    tokio::pin!(wrap_remote);
+                                    if let Err(_) = tokio::io::copy_bidirectional(
+                                        &mut wrap_local,
+                                        &mut wrap_remote,
+                                    )
+                                    .await
+                                    {
+                                        use tokio::io::AsyncWriteExt;
+                                        let _ = wrap_local.shutdown().await;
+                                        let _ = wrap_remote.shutdown().await;
+                                    }
                                 });
 
                                 use dashmap::mapref::entry::Entry;

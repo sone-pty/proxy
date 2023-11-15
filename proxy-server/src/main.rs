@@ -12,6 +12,7 @@ use agent::AgentHandler;
 use clap::Parser;
 use client::ClientHandler;
 use conn::Agent;
+use timeout_stream::TimeoutStream;
 use tokio::net::{TcpListener, TcpStream};
 use vnpkt::tokio_ext::{io::AsyncReadExt, registry::Registry};
 use vnsvrbase::{process::hook_terminate_signal, tokio_ext::tcp_link::TcpLink};
@@ -110,7 +111,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             if rx_wrap.is_some() {
                                 tokio::spawn(async move {
                                     match rx_wrap.unwrap().await {
-                                        Ok(mut peer) => {
+                                        Ok(peer) => {
                                             tokio::spawn(async move {
                                                 println!("In the proxy.{}, conn.{} begin", agent_id, sid);
                                                 // remove conn
@@ -119,7 +120,15 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                     agents.get(&agent_id).map(|v| v.remove_conn(cid, sid));
                                                 }
 
-                                                let _ = tokio::io::copy_bidirectional(&mut peer, &mut stream).await;
+                                                let wrap_peer = TimeoutStream::new(peer);
+                                                let wrap_stream = TimeoutStream::new(stream);
+                                                tokio::pin!(wrap_peer);
+                                                tokio::pin!(wrap_stream);
+                                                if let Err(_) = tokio::io::copy_bidirectional(&mut wrap_peer, &mut wrap_stream).await {
+                                                    use tokio::io::AsyncWriteExt;
+                                                    let _ = wrap_peer.shutdown().await;
+                                                    let _ = wrap_stream.shutdown().await;
+                                                }
                                                 println!("In the proxy.{}, conn.{} end", agent_id, sid);
                                             });
                                         }
