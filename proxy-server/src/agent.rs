@@ -5,11 +5,12 @@ use protocol::{
     ReqNewConnectionAgent, ReqNewConnectionClient, RspAgentBuild, RspAgentLoginFailed,
     RspAgentLoginOk, RspClientLoginFailed, RspClientNotFound,
 };
+use slog::error;
 use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, Registry, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::{conn::Agent, AGENTS};
+use crate::{conn::Agent, AGENTS, LOGGER};
 
 pub struct AgentHandler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -81,7 +82,7 @@ impl PacketProc<RspAgentBuild> for AgentHandler {
             let agent = agents.get(&pkt.agent_id);
 
             if agent.is_none() {
-                println!("No agent with id = {}", pkt.agent_id);
+                error!(LOGGER, "No agent with id = {}", pkt.agent_id);
                 Err(std::io::ErrorKind::InvalidData.into())
             } else {
                 let client_handle = agent.unwrap().get_client_handle(pkt.id);
@@ -109,11 +110,13 @@ impl PacketProc<RspAgentBuild> for AgentHandler {
                         let _ = send_pkt!(client_handle.unwrap(), RspClientLoginFailed {});
                         let _ = send_pkt!(self.handle, PacketInfoClientClosed { id: pkt.id });
                         agent.unwrap().remove_client(pkt.id);
+                        error!(LOGGER, "agent-build check (false, true), agent-id = {}, client-id = {}", pkt.agent_id, pkt.id)
                     }
                     (true, false) => {
                         let _ = send_pkt!(self.handle, RspClientNotFound { id: pkt.id });
+                        error!(LOGGER, "agent-build check (true, false), agent-id = {}, client-id = {}", pkt.agent_id, pkt.id)
                     }
-                    _ => {}
+                    _ => error!(LOGGER, "agent-build check (false, false), agent-id = {}, client-id = {}", pkt.agent_id, pkt.id)
                 }
                 Ok(())
             }

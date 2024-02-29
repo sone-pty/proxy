@@ -4,11 +4,12 @@ use protocol::{
     PacketHbClient, PacketInfoClientClosed, ReqAgentBuild, ReqClientLogin, RspClientLoginOk,
     RspNewConnFailedClient, RspServiceNotFound,
 };
+use slog::info;
 use tokio::{io::BufReader, net::tcp::OwnedReadHalf};
 use vnpkt::tokio_ext::registry::{PacketProc, Registry, RegistryInit};
 use vnsvrbase::tokio_ext::tcp_link::send_pkt;
 
-use crate::AGENTS;
+use crate::{AGENTS, LOGGER};
 
 pub struct ClientHandler {
     handle: vnsvrbase::tokio_ext::tcp_link::Handle,
@@ -35,7 +36,7 @@ impl Drop for ClientHandler {
             agents.get(&aid).map(|v| {
                 let _ = send_pkt!(v.handle(), PacketInfoClientClosed { id });
                 v.remove_client(id);
-                println!("In the proxy.{}, Client.{} disconnected", aid, id);
+                info!(LOGGER, "In the proxy.{}, Client.{} disconnected", aid, id);
             });
         }
     }
@@ -104,6 +105,7 @@ impl PacketProc<RspNewConnFailedClient> for ClientHandler {
             agents.get(&pkt.agent_id).map(|agent| {
                 let _ = send_pkt!(agent.handle(), PacketInfoClientClosed { id: pkt.id });
             });
+            info!(LOGGER, "recv RspNewConnFailedClient pkt");
             Ok(())
         }
     }

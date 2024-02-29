@@ -13,6 +13,12 @@ use agent::AgentHandler;
 use clap::Parser;
 use client::ClientHandler;
 use conn::Agent;
+use file_rotate::{
+    compression::Compression,
+    suffix::{AppendTimestamp, FileLimit},
+    ContentLimit, FileRotate,
+};
+use slog::{error, info, o, Drain, Logger};
 use timeout_stream::TimeoutStream;
 use tokio::net::{TcpListener, TcpStream};
 use vnpkt::tokio_ext::{io::AsyncReadExt, registry::Registry};
@@ -26,6 +32,25 @@ static REGISTRY_CLIENT: LazyLock<Registry<ClientHandler>> = LazyLock::new(Regist
 static REGISTRY_AGENT: LazyLock<Registry<AgentHandler>> = LazyLock::new(Registry::new);
 static AGENTS: LazyLock<RwLock<HashMap<u32, Agent>>> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
+static LOGGER: LazyLock<Logger> = LazyLock::new(|| {
+    let log_path = "/var/log/puty-proxy/proxy-server.log";
+    let log = FileRotate::new(
+        log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(4)),
+        ContentLimit::Lines(30000),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    );
+    let decorator = slog_term::PlainDecorator::new(log);
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(4096)
+        .overflow_strategy(slog_async::OverflowStrategy::Block)
+        .build()
+        .fuse();
+    slog::Logger::root(drain, o!())
+});
 
 #[derive(Parser)]
 struct Args {
@@ -68,7 +93,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
 
     tokio::select! {
         _ = async {
-            let (sender, mut recv) = tokio::sync::mpsc::channel::<TcpStream>(1000);
+            let (sender, mut recv) = tokio::sync::mpsc::channel::<TcpStream>(10000);
             let sender_clone = sender.clone();
             tokio::spawn(async move {
                 loop {
@@ -77,7 +102,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                             let _ = sender_clone.send(stream).await;
                         }
                         Err(e) => {
-                            println!("main listener accept failed: {}", e);
+                            error!(LOGGER, "main listener accept failed: {}", e);
                         }
                     }
                 }
@@ -114,7 +139,7 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                     match rx_wrap.unwrap().await {
                                         Ok(peer) => {
                                             tokio::spawn(async move {
-                                                println!("In the proxy.{}, conn.{} begin", agent_id, sid);
+                                                info!(LOGGER, "In the agent.{}, conn.{} begin", agent_id, sid);
                                                 // remove conn
                                                 {
                                                     let agents = AGENTS.read().unwrap();
@@ -132,10 +157,10 @@ async fn main_loop(wrt: tokio::runtime::Handle, args: Args) -> std::io::Result<(
                                                     let _ = wrap_peer.shutdown().await;
                                                     let _ = wrap_stream.shutdown().await;
                                                 }
-                                                println!("In the proxy.{}, conn.{} end", agent_id, sid);
+                                                info!(LOGGER, "In the agent.{}, conn.{} end", agent_id, sid);
                                             });
                                         }
-                                        _ => {}
+                                        Err(e) => error!(LOGGER, "rx.await err: {}", e)
                                     }
                                 });
                             }
@@ -167,6 +192,7 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
                         continue;
                     }
                 }
+                error!(LOGGER, "recv invalid pid: {}", pid);
                 return Err(std::io::ErrorKind::InvalidData.into());
             }
         } else {
@@ -182,9 +208,11 @@ async fn receiving(link: &mut TcpLink) -> std::io::Result<()> {
                         continue;
                     }
                 }
+                error!(LOGGER, "recv invalid pid: {}", pid);
                 return Err(std::io::ErrorKind::InvalidData.into());
             }
         }
     }
+    error!(LOGGER, "recv invalid pid: {}", pid);
     Err(std::io::ErrorKind::InvalidData.into())
 }

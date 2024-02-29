@@ -12,11 +12,13 @@ use std::{
 
 use clap::Parser;
 use dashmap::DashMap;
+use file_rotate::{compression::Compression, suffix::{AppendTimestamp, FileLimit}, ContentLimit, FileRotate};
 use protocol::{
     compose, PacketHbAgent, PacketInfoClientClosed, PacketInfoConnectFailed, ReqAgentBuild,
     ReqAgentLogin, ReqNewConnectionAgent, RspAgentBuild, RspAgentLoginFailed, RspAgentLoginOk,
     RspClientNotFound,
 };
+use slog::{error, info, o, Drain, Logger};
 use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
@@ -35,6 +37,25 @@ use vnsvrbase::{
 static REGISTRY: LazyLock<Registry<Handler>> = LazyLock::new(Registry::new);
 static PROXYS: LazyLock<DashMap<u32, (u16, JoinHandle<()>, Vec<(u32, JoinHandle<()>)>)>> =
     LazyLock::new(DashMap::new);
+static LOGGER: LazyLock<Logger> = LazyLock::new(|| {
+    let log_path = "/var/log/puty-proxy/proxy-agent.log";
+    let log = FileRotate::new(
+        log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(4)),
+        ContentLimit::Lines(30000),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    );
+    let decorator = slog_term::PlainDecorator::new(log);
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(4096)
+        .overflow_strategy(slog_async::OverflowStrategy::Block)
+        .build()
+        .fuse();
+    slog::Logger::root(drain, o!())
+});
 
 type Conns = DashMap<u32, DashMap<u32, TcpStream>>;
 
@@ -61,7 +82,7 @@ fn main() {
 
     rt.block_on(async {
         if let Err(_) = main_loop(args).await {
-            println!("connect server failed");
+            error!(LOGGER, "connect server failed");
             exit(-1);
         }
         let _ = quit_rx.changed().await;
@@ -70,7 +91,7 @@ fn main() {
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("connect server success");
+    info!(LOGGER, "connect server success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(link.handle(), ReqAgentLogin { id: args.id });
@@ -92,7 +113,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(20)) => {
                 if cnt.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 3 {
-                    println!("recv from server timeout 3 times, conn closed");
+                    info!(LOGGER, "recv from server timeout 3 times, conn closed");
                     link.handle().close();
                     exit(-1);
                 }
@@ -103,18 +124,20 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
                 let register = &*REGISTRY;
 
                 if pid > u32::MAX as u64 {
+                    error!(LOGGER, "recv wrong pid = {}", pid);
                     std::io::Result::<()>::Err(std::io::ErrorKind::InvalidData.into())
                 } else if let Some(item) = register.query(pid as u32) {
                     let r = item.recv(&mut link.read).await?;
                     r.proc(&mut handler).await?;
                     Ok(())
                 } else {
+                    error!(LOGGER, "recv wrong pid = {}", pid);
                     std::io::Result::<()>::Err(std::io::ErrorKind::InvalidData.into())
                 }
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    println!("error: {}", e);
+                    error!(LOGGER, "{}", e);
                     exit(-1);
                 }
             }
@@ -174,7 +197,7 @@ impl PacketProc<RspAgentLoginFailed> for Handler {
 
     fn proc(&mut self, _: Box<RspAgentLoginFailed>) -> Self::Output<'_> {
         async {
-            println!("login server failed");
+            info!(LOGGER, "login server failed");
             self.handle.close();
             exit(-1);
         }
@@ -196,7 +219,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
             let proxy = tokio::spawn(async move {
                 match TcpListener::bind((Ipv4Addr::UNSPECIFIED, pkt.port)).await {
                     Ok(listener) => {
-                        println!("({}).proxy[{}] begin", agent_id, pkt.port);
+                        info!(LOGGER, "agent-{} on port {} begin", agent_id, pkt.port);
                         loop {
                             if let Ok((stream, _)) = listener.accept().await {
                                 let _ = stream.set_nodelay(true);
@@ -214,10 +237,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                         e.get().insert(sid, stream);
                                     }
                                 }
-                                println!(
-                                    "({}).proxy[{}], local conn.{} build",
-                                    agent_id, pkt.port, sid
-                                );
+                                info!(LOGGER, "In agent-{} of port {}, local conn.{} build", agent_id, pkt.port, sid);
                                 // send to server
                                 let _ = send_pkt!(
                                     handle,
@@ -231,7 +251,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                             }
                         }
                     }
-                    _ => {
+                    Err(e) => {
                         let _ = send_pkt!(
                             handle,
                             RspAgentBuild {
@@ -241,6 +261,7 @@ impl PacketProc<ReqAgentBuild> for Handler {
                                 ok: false
                             }
                         );
+                        error!(LOGGER, "agent-build failed: {}", e);
                     }
                 }
             });
@@ -282,6 +303,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                     wrap_remote.set_timeout(Some(Duration::from_secs(30)));
                                     tokio::pin!(wrap_local);
                                     tokio::pin!(wrap_remote);
+                                    info!(LOGGER, "In agent-{}, conn.{} begin with cid = {}", agent_id, sid, cid);
                                     if let Err(_) = tokio::io::copy_bidirectional(
                                         &mut wrap_local,
                                         &mut wrap_remote,
@@ -292,6 +314,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                         let _ = wrap_local.shutdown().await;
                                         let _ = wrap_remote.shutdown().await;
                                     }
+                                    info!(LOGGER, "In agent-{}, conn.{} end with cid = {}", agent_id, sid, cid);
                                 });
 
                                 use dashmap::mapref::entry::Entry;
@@ -299,10 +322,10 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                                     Entry::Occupied(mut e) => {
                                         e.get_mut().2.push((pkt.sid, task));
                                     }
-                                    _ => {}
+                                    _ => error!(LOGGER, "cid = {} already exist", pkt.id)
                                 }
                             }
-                            _ => {}
+                            _ => error!(LOGGER, "can't find conns with sid = {}", pkt.sid)
                         }
                     }
                 }
@@ -317,7 +340,7 @@ impl PacketProc<ReqNewConnectionAgent> for Handler {
                     }
                 }
                 let _ = send_pkt!(self.handle, PacketInfoConnectFailed { agent_id, cid, sid });
-                println!("connect server conn port failed");
+                error!(LOGGER, "connect server conn port failed");
             }
             Ok(())
         }
@@ -353,7 +376,7 @@ impl Handler {
             for (_, v) in conns {
                 v.abort();
             }
-            println!("({}).proxy[{}] shutdown", self.args.id, port);
+            info!(LOGGER, "agent-{} on port {} shutdown", self.args.id, port);
         }
         Ok(())
     }

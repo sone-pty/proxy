@@ -13,6 +13,12 @@ dashmap = "4.0.2"
 clap = { version = "4.1.8", features = ["derive"] }
 timeout-stream = { path = "../timeout-stream" }
 
+# log
+slog = "2.7.0"
+slog-term = "2.9.1"
+slog-async = "2.8.0"
+file-rotate = "0.7.5"
+
 [dependencies.tokio]
 version = "1.25"
 features = ["net", "macros", "sync", "io-util", "rt-multi-thread", "time", "fs"]

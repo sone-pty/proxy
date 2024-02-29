@@ -11,10 +11,12 @@ use std::{
 
 use clap::Parser;
 use dashmap::DashMap;
+use file_rotate::{compression::Compression, suffix::{AppendTimestamp, FileLimit}, ContentLimit, FileRotate};
 use protocol::{
     compose, PacketHbClient, PacketInfoConnectFailed, ReqClientLogin, ReqNewConnectionClient,
     RspClientLoginFailed, RspClientLoginOk, RspNewConnFailedClient, RspServiceNotFound,
 };
+use slog::{error, info, o, Drain, Logger};
 use timeout_stream::TimeoutStream;
 use tokio::{
     io::BufReader,
@@ -32,6 +34,25 @@ use vnsvrbase::{
 
 static REGISTRY: LazyLock<Registry<Client>> = LazyLock::new(Registry::new);
 static LOCALS: LazyLock<DashMap<u32, JoinHandle<()>>> = LazyLock::new(|| DashMap::new());
+static LOGGER: LazyLock<Logger> = LazyLock::new(|| {
+    let log_path = "/var/log/puty-proxy/proxy-client.log";
+    let log = FileRotate::new(
+        log_path,
+        AppendTimestamp::default(FileLimit::MaxFiles(4)),
+        ContentLimit::Lines(30000),
+        Compression::None,
+        #[cfg(unix)]
+        None,
+    );
+    let decorator = slog_term::PlainDecorator::new(log);
+    let drain = slog_term::FullFormat::new(decorator).build().fuse();
+    let drain = slog_async::Async::new(drain)
+        .chan_size(4096)
+        .overflow_strategy(slog_async::OverflowStrategy::Block)
+        .build()
+        .fuse();
+    slog::Logger::root(drain, o!())
+});
 
 #[derive(Parser)]
 pub struct Args {
@@ -57,7 +78,7 @@ fn main() {
 
     rt.block_on(async {
         if let Err(_) = main_loop(args).await {
-            println!("connect server failed");
+            error!(LOGGER, "connect server failed");
             exit(-1);
         }
         let _ = quit_rx.changed().await;
@@ -66,7 +87,7 @@ fn main() {
 
 async fn main_loop(args: Args) -> std::io::Result<()> {
     let stream = TcpStream::connect((args.server.as_str(), args.server_main_port)).await?;
-    println!("connect server success");
+    info!(LOGGER, "connect server success");
     let handle = tokio::runtime::Handle::current();
     let _ = TcpLink::attach(stream, &handle, &handle, async move |link: &mut TcpLink| {
         let _ = send_pkt!(
@@ -89,7 +110,7 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(20)) => {
                 if cnt.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 3 {
-                    println!("recv from server timeout 3 times, conn closed");
+                    info!(LOGGER, "recv from server timeout 3 times, conn closed");
                     link.handle().close();
                     exit(-1);
                 }
@@ -100,18 +121,20 @@ async fn receiving(link: &mut TcpLink, args: Args) -> std::io::Result<()> {
                 let register = &*REGISTRY;
 
                 if pid > u32::MAX as u64 {
+                    error!(LOGGER, "recv wrong pid = {}", pid);
                     std::io::Result::<()>::Err(std::io::ErrorKind::InvalidData.into())
                 } else if let Some(item) = register.query(pid as u32) {
                     let r = item.recv(&mut link.read).await?;
                     r.proc(&mut client).await?;
                     Ok(())
                 } else {
+                    error!(LOGGER, "recv wrong pid = {}", pid);
                     std::io::Result::<()>::Err(std::io::ErrorKind::InvalidData.into())
                 }
             } => {
                 if let Err(e) = res {
                     link.handle().close();
-                    println!("error: {}", e);
+                    error!(LOGGER, "{}", e);
                     exit(-1);
                 }
             }
@@ -161,7 +184,7 @@ impl PacketProc<RspClientLoginFailed> for Client {
 
     fn proc(&mut self, _: Box<RspClientLoginFailed>) -> Self::Output<'_> {
         async {
-            println!("client login failed, proxy build listener failed");
+            info!(LOGGER, "client login failed, proxy build listener failed");
             self.handle.close();
             exit(-1);
         }
@@ -189,6 +212,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     .await
                     .is_ok()
                     {
+                        let sid = pkt.sid;
                         let task = tokio::spawn(async move {
                             let mut wrap_local = TimeoutStream::new(local);
                             let mut wrap_remote = TimeoutStream::new(remote);
@@ -196,6 +220,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                             wrap_remote.set_timeout(Some(Duration::from_secs(30)));
                             tokio::pin!(wrap_local);
                             tokio::pin!(wrap_remote);
+                            info!(LOGGER, "In client.{}, conn.{} in the agent-{} begin", pkt.id, pkt.sid, pkt.agent_id);
                             if let Err(_) =
                                 tokio::io::copy_bidirectional(&mut wrap_local, &mut wrap_remote)
                                     .await
@@ -204,10 +229,11 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                                 let _ = wrap_local.shutdown().await;
                                 let _ = wrap_remote.shutdown().await;
                             }
+                            info!(LOGGER, "In client.{}, conn.{} in the agent-{} end", pkt.id, pkt.sid, pkt.agent_id);
                         });
-                        LOCALS.insert(pkt.sid, task);
+                        LOCALS.insert(sid, task);
                     } else {
-                        println!("send pkt id to server failed");
+                        error!(LOGGER, "send pkt id to server failed, agent-id = {}, cid = {}, sid = {}", agent_id, pkt.id, pkt.sid);
                         let _ = send_pkt!(
                             self.handle,
                             RspNewConnFailedClient {
@@ -218,7 +244,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                         );
                     }
                 } else {
-                    println!("connect remote server failed");
+                    error!(LOGGER, "connect server conn-port failed, agent-id = {}, cid = {}, sid = {}", agent_id, pkt.id, pkt.sid);
                     let _ = send_pkt!(
                         self.handle,
                         RspNewConnFailedClient {
@@ -229,7 +255,7 @@ impl PacketProc<ReqNewConnectionClient> for Client {
                     );
                 }
             } else {
-                println!("connect target failed");
+                error!(LOGGER, "connect target failed, agent-id = {}, cid = {}, sid = {}", agent_id, pkt.id, pkt.sid);
                 let _ = send_pkt!(
                     self.handle,
                     RspNewConnFailedClient {
@@ -249,7 +275,7 @@ impl PacketProc<RspServiceNotFound> for Client {
 
     fn proc(&mut self, _: Box<RspServiceNotFound>) -> Self::Output<'_> {
         async {
-            println!("service is not found");
+            info!(LOGGER, "service is not found");
             self.handle.close();
             exit(-1);
         }
@@ -262,7 +288,7 @@ impl PacketProc<PacketInfoConnectFailed> for Client {
     fn proc(&mut self, pkt: Box<PacketInfoConnectFailed>) -> Self::Output<'_> {
         async move {
             if pkt.agent_id == self.args.agentid && self.id.is_some_and(|v| v == pkt.cid) {
-                println!("Info AgentConnectFailed");
+                info!(LOGGER, "Info AgentConnectFailed");
                 LOCALS.remove(&pkt.sid).map(|(_, v)| v.abort());
             }
             Ok(())
@@ -285,6 +311,7 @@ impl PacketProc<RspClientLoginOk> for Client {
                     }
                 });
             } else {
+                error!(LOGGER, "client login with agent-id not match, self-agent-id = {}, pkt-agent-id = {}", self.args.agentid, pkt.agent_id);
                 self.handle.close();
                 exit(-1);
             }
