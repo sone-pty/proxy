@@ -1,5 +1,4 @@
 #![feature(async_closure)]
-#![feature(lazy_cell)]
 #![feature(impl_trait_in_assoc_type)]
 
 use std::{

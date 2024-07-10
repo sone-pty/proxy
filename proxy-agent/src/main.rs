@@ -1,5 +1,4 @@
 #![feature(async_closure)]
-#![feature(lazy_cell)]
 #![feature(impl_trait_in_assoc_type)]
 
 use std::{
@@ -366,7 +365,7 @@ impl PacketProc<PacketInfoClientClosed> for Handler {
 impl Handler {
     async fn clear(&mut self, id: u32) -> std::io::Result<()> {
         use tokio::io::AsyncWriteExt;
-        self.conns.remove(&id).map(async move |v| {
+        self.conns.remove(&id).map(async move |v: (u32, DashMap<u32, TcpStream>)| {
             for mut v in v.1 {
                 let _ = v.1.shutdown().await;
             }

@@ -1,4 +1,3 @@
-#![feature(lazy_cell)]
 #![feature(impl_trait_in_assoc_type)]
 #![feature(async_closure)]
 #![feature(sync_unsafe_cell)]
